@@ -1,0 +1,99 @@
+use anchor_lang::prelude::*;
+use anchor_lang::system_program;
+use crate::state::{GovernanceConfig, VeLock};
+use crate::errors::GovernanceError;
+
+pub fn handler(ctx: Context<ClaimRevenueShare>, treasury_vault_bump: u8) -> Result<()> {
+    let current_slot = Clock::get()?.slot;
+    let lock = &mut ctx.accounts.lock;
+    let config = &ctx.accounts.config;
+
+    // Get current veRISE weight
+    let current_verise = lock.current_verise(current_slot);
+    require!(current_verise > 0, GovernanceError::ZeroAmount);
+
+    // Read revenue index from treasury account data
+    let revenue_index = {
+        let treasury_data = ctx.accounts.treasury.try_borrow_data()?;
+        if treasury_data.len() >= 124 {
+            let mut bytes = [0u8; 16];
+            bytes.copy_from_slice(&treasury_data[108..124]);
+            u128::from_le_bytes(bytes)
+        } else {
+            0u128
+        }
+    };
+
+    // Calculate claimable amount
+    let index_delta = revenue_index
+        .saturating_sub(lock.last_revenue_index);
+
+    require!(index_delta > 0, GovernanceError::NoRewardsToClaim);
+
+    // claimable = index_delta * current_verise / total_verise
+    let claimable = if config.total_verise > 0 {
+        index_delta
+            .checked_mul(current_verise as u128)
+            .ok_or(GovernanceError::MathOverflow)?
+            .checked_div(config.total_verise)
+            .ok_or(GovernanceError::MathOverflow)? as u64
+    } else {
+        0
+    };
+
+    require!(claimable > 0, GovernanceError::NoRewardsToClaim);
+
+    // Transfer SOL from treasury vault to user
+    let seeds = &[b"treasury_vault".as_ref(), &[treasury_vault_bump]];
+    let signer = &[&seeds[..]];
+
+    let cpi_ctx = CpiContext::new_with_signer(
+        ctx.accounts.system_program.to_account_info(),
+        system_program::Transfer {
+            from: ctx.accounts.treasury_vault.to_account_info(),
+            to: ctx.accounts.user.to_account_info(),
+        },
+        signer,
+    );
+    system_program::transfer(cpi_ctx, claimable)?;
+
+    // Update lock state
+    lock.last_revenue_index = revenue_index;
+    lock.total_revenue_claimed = lock.total_revenue_claimed
+        .checked_add(claimable)
+        .ok_or(GovernanceError::MathOverflow)?;
+
+    msg!("Revenue claimed: {} lamports", claimable);
+    msg!("Total claimed all time: {}", lock.total_revenue_claimed);
+
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct ClaimRevenueShare<'info> {
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    #[account(
+        seeds = [b"governance_config"],
+        bump = config.bump
+    )]
+    pub config: Account<'info, GovernanceConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"ve_lock", user.key().as_ref(), &[lock.nonce]],
+        bump = lock.bump,
+        constraint = lock.owner == user.key()
+    )]
+    pub lock: Account<'info, VeLock>,
+
+    /// CHECK: Staking program treasury — read only for revenue index.
+    pub treasury: AccountInfo<'info>,
+
+    /// CHECK: Treasury SOL vault — PDA from staking program.
+    #[account(mut)]
+    pub treasury_vault: UncheckedAccount<'info>,
+
+    pub system_program: Program<'info, System>,
+}

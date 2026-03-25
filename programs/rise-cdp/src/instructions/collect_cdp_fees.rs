@@ -1,0 +1,174 @@
+use anchor_lang::prelude::*;
+use anchor_lang::system_program;
+use crate::errors::CdpError;
+use rise_staking::state::{GlobalPool, ProtocolTreasury};
+use rise_staking::program::RiseStaking;
+
+/// Sweep accumulated SOL from cdp_fee_vault and distribute:
+///
+///  90%  → pool_vault   (credited to staking pool; raises riseSOL exchange rate)
+///   5%  → treasury     (protocol reserve)
+///   5%  → treasury     (veRISE holder share; updates revenue_index via CPI)
+///
+/// Permissionless — any caller can trigger the sweep.
+pub fn handler(ctx: Context<CollectCdpFees>) -> Result<()> {
+    let vault_balance = ctx.accounts.cdp_fee_vault.lamports();
+    require!(vault_balance > 0, CdpError::NoCdpFeesToCollect);
+
+    let total_fees = vault_balance;
+
+    // ── Split: 90% staking pool, 5% reserve, 5% veRISE ─────────────────────
+    const STAKING_SHARE_BPS: u64 = 9_000;
+    const VERISE_SHARE_BPS: u64 = 500;
+
+    let staking_amount = total_fees
+        .checked_mul(STAKING_SHARE_BPS)
+        .ok_or(CdpError::MathOverflow)?
+        / 10_000;
+
+    let remaining = total_fees
+        .checked_sub(staking_amount)
+        .ok_or(CdpError::MathOverflow)?;
+
+    let verise_amount = remaining
+        .checked_mul(VERISE_SHARE_BPS)
+        .ok_or(CdpError::MathOverflow)?
+        / (10_000 - STAKING_SHARE_BPS);
+
+    let reserve_amount = remaining
+        .checked_sub(verise_amount)
+        .ok_or(CdpError::MathOverflow)?;
+
+    let fee_vault_bump = ctx.bumps.cdp_fee_vault;
+    let seeds = &[b"cdp_fee_vault".as_ref(), &[fee_vault_bump]];
+    let signer = &[&seeds[..]];
+
+    // ── Transfer staking share → pool_vault ──────────────────────────────────
+    if staking_amount > 0 {
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.cdp_fee_vault.to_account_info(),
+                    to: ctx.accounts.pool_vault.to_account_info(),
+                },
+                signer,
+            ),
+            staking_amount,
+        )?;
+
+        rise_staking::cpi::credit_staking_revenue(
+            CpiContext::new_with_signer(
+                ctx.accounts.staking_program.to_account_info(),
+                rise_staking::cpi::accounts::CreditStakingRevenue {
+                    caller: ctx.accounts.cdp_fee_vault.to_account_info(),
+                    global_pool: ctx.accounts.global_pool.to_account_info(),
+                    pool_vault: ctx.accounts.pool_vault.to_account_info(),
+                },
+                signer,
+            ),
+            staking_amount,
+        )?;
+
+        msg!("CDP fees → staking pool: {} lamports", staking_amount);
+    }
+
+    // ── Transfer reserve share → treasury_vault ───────────────────────────────
+    if reserve_amount > 0 {
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.cdp_fee_vault.to_account_info(),
+                    to: ctx.accounts.treasury_vault.to_account_info(),
+                },
+                signer,
+            ),
+            reserve_amount,
+        )?;
+        msg!("CDP fees → treasury reserve: {} lamports", reserve_amount);
+    }
+
+    // ── Transfer veRISE share → treasury_vault ────────────────────────────────
+    if verise_amount > 0 {
+        system_program::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.system_program.to_account_info(),
+                system_program::Transfer {
+                    from: ctx.accounts.cdp_fee_vault.to_account_info(),
+                    to: ctx.accounts.treasury_vault.to_account_info(),
+                },
+                signer,
+            ),
+            verise_amount,
+        )?;
+        msg!("CDP fees → veRISE vault: {} lamports", verise_amount);
+    }
+
+    // ── CPI to staking: update revenue_index and reserve_lamports ────────────
+    rise_staking::cpi::register_external_revenue(
+        CpiContext::new_with_signer(
+            ctx.accounts.staking_program.to_account_info(),
+            rise_staking::cpi::accounts::RegisterExternalRevenue {
+                caller: ctx.accounts.cdp_fee_vault.to_account_info(),
+                treasury: ctx.accounts.treasury.to_account_info(),
+            },
+            signer,
+        ),
+        verise_amount,
+        reserve_amount,
+    )?;
+
+    msg!(
+        "CDP fee collection complete — total: {} | staking: {} | reserve: {} | veRISE: {}",
+        total_fees,
+        staking_amount,
+        reserve_amount,
+        verise_amount,
+    );
+
+    Ok(())
+}
+
+#[derive(Accounts)]
+pub struct CollectCdpFees<'info> {
+    /// Permissionless — any account can trigger the sweep.
+    pub caller: Signer<'info>,
+
+    /// CHECK: CDP fee vault PDA — accumulates SOL from repay_debt interest.
+    #[account(
+        mut,
+        seeds = [b"cdp_fee_vault"],
+        bump
+    )]
+    pub cdp_fee_vault: UncheckedAccount<'info>,
+
+    /// ProtocolTreasury from the staking program. Written via CPI.
+    #[account(mut)]
+    pub treasury: Account<'info, ProtocolTreasury>,
+
+    /// CHECK: Treasury SOL vault — receives reserve + veRISE shares.
+    #[account(mut)]
+    pub treasury_vault: UncheckedAccount<'info>,
+
+    /// GlobalPool from staking — updated by credit_staking_revenue CPI.
+    #[account(
+        mut,
+        seeds = [b"global_pool"],
+        seeds::program = rise_staking::ID,
+        bump = global_pool.bump
+    )]
+    pub global_pool: Box<Account<'info, GlobalPool>>,
+
+    /// CHECK: Staking pool SOL vault — receives the 90% staking share.
+    #[account(
+        mut,
+        seeds = [b"pool_vault"],
+        seeds::program = rise_staking::ID,
+        bump
+    )]
+    pub pool_vault: UncheckedAccount<'info>,
+
+    pub staking_program: Program<'info, RiseStaking>,
+    pub system_program: Program<'info, System>,
+}
