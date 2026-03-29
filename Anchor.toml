@@ -16,7 +16,7 @@ rise_staking = "BnQc6jJMT6mt3mvWuQFAd9vf2T2wWkAYD2uGjCXud6Lo"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "https://devnet.helius-rpc.com/?api-key=787be2ec-9299-40c2-af00-e559a4715fa1"
 wallet = "~/.config/solana/id.json"
 
 [test.validator]

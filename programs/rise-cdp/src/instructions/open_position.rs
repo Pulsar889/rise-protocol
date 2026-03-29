@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer, Mint};
-use crate::state::{CdpPosition, CollateralConfig, CdpConfig};
+use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig};
 use crate::errors::CdpError;
 use rise_staking::state::GlobalPool;
 use rise_staking::program::RiseStaking;
@@ -157,6 +157,25 @@ pub fn handler(
         rise_sol_to_mint,
     )?;
 
+    // ── Initialize BorrowRewards account for this position ───────────────────
+    let borrow_rewards = &mut ctx.accounts.borrow_rewards;
+    let reward_per_token = ctx.accounts.borrow_rewards_config.reward_per_token;
+
+    borrow_rewards.owner = ctx.accounts.borrower.key();
+    borrow_rewards.position = position.key();
+    borrow_rewards.pending_rewards = 0;
+    borrow_rewards.total_claimed = 0;
+    borrow_rewards.last_checkpoint_slot = current_slot;
+    borrow_rewards.bump = ctx.bumps.borrow_rewards;
+    // reward_debt = initial_debt * reward_per_token / REWARD_SCALE
+    borrow_rewards.sync_debt(reward_per_token, rise_sol_to_mint)?;
+
+    // ── Update global debt tracker ───────────────────────────────────────────
+    let brc = &mut ctx.accounts.borrow_rewards_config;
+    brc.total_cdp_debt = brc.total_cdp_debt
+        .checked_add(rise_sol_to_mint)
+        .ok_or(CdpError::MathOverflow)?;
+
     msg!("Position opened");
     msg!("Collateral: {} tokens", collateral_amount);
     msg!("Collateral USD value: {}", collateral_usd_value);
@@ -189,10 +208,10 @@ pub struct OpenPosition<'info> {
         seeds = [b"cdp_config"],
         bump = cdp_config.bump
     )]
-    pub cdp_config: Account<'info, CdpConfig>,
+    pub cdp_config: Box<Account<'info, CdpConfig>>,
 
     /// GlobalPool from staking — read-only for staking_rise_sol_supply (ceiling denominator).
-    pub global_pool: Account<'info, GlobalPool>,
+    pub global_pool: Box<Account<'info, GlobalPool>>,
 
     #[account(
         init,
@@ -201,14 +220,14 @@ pub struct OpenPosition<'info> {
         seeds = [b"cdp_position", borrower.key().as_ref(), &[nonce]],
         bump
     )]
-    pub position: Account<'info, CdpPosition>,
+    pub position: Box<Account<'info, CdpPosition>>,
 
     #[account(
         mut,
         seeds = [b"collateral_config", collateral_config.mint.as_ref()],
         bump = collateral_config.bump
     )]
-    pub collateral_config: Account<'info, CollateralConfig>,
+    pub collateral_config: Box<Account<'info, CollateralConfig>>,
 
     /// The collateral token mint.
     pub collateral_mint: Box<Account<'info, Mint>>,
@@ -252,4 +271,22 @@ pub struct OpenPosition<'info> {
     pub staking_program: Program<'info, RiseStaking>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+
+    /// Global borrow rewards config — updated with new total_cdp_debt.
+    #[account(
+        mut,
+        seeds = [b"borrow_rewards_config"],
+        bump = borrow_rewards_config.bump
+    )]
+    pub borrow_rewards_config: Box<Account<'info, BorrowRewardsConfig>>,
+
+    /// Per-position borrow rewards tracker — initialized here.
+    #[account(
+        init,
+        payer = borrower,
+        space = BorrowRewards::SIZE,
+        seeds = [b"borrow_rewards", position.key().as_ref()],
+        bump
+    )]
+    pub borrow_rewards: Box<Account<'info, BorrowRewards>>,
 }

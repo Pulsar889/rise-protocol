@@ -1,13 +1,13 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Transfer, Mint};
-use crate::state::CollateralConfig;
+use anchor_spl::token::{self, Token, TokenAccount, Transfer, Mint, CloseAccount};
+use crate::state::{CollateralConfig, CdpConfig};
 use crate::errors::CdpError;
 use rise_staking::state::GlobalPool;
 
 /// Permissionless liquidity backstop. Anyone can call this when the staking pool's
 /// liquid buffer cannot cover queued withdrawal tickets. The protocol seizes
-/// collateral from the shared vault and holds it in a dedicated seizure vault
-/// pending Jupiter conversion to SOL.
+/// collateral from the shared vault, converts it to SOL via Jupiter, deposits the SOL
+/// into pool_vault, and registers the new liquid buffer so withdrawal tickets can be paid.
 ///
 /// The borrower's position is NOT modified — their entitlement is still recorded
 /// in CollateralConfig::total_collateral_entitlements. When they repay, the protocol
@@ -15,12 +15,17 @@ use rise_staking::state::GlobalPool;
 ///
 /// Flow:
 ///   1. Verify liquid_buffer_lamports < pending_withdrawals_lamports
-///   2. Transfer `amount` tokens from collateral_vault → cdp_seizure_vault
-///   3. TODO: Jupiter CPI converts cdp_seizure_vault tokens → SOL
-///   4. TODO: Transfer SOL to pool_vault
-///   5. TODO: CPI to rise_staking::receive_cdp_liquidity to register the SOL
-///            as liquid buffer so withdrawal tickets can be paid out
-pub fn handler(ctx: Context<RedeemCollateralForLiquidity>, amount: u64) -> Result<()> {
+///   2. Transfer `amount` tokens: collateral_vault → cdp_seizure_vault
+///   3. Jupiter CPI: cdp_seizure_vault → cdp_wsol_vault (WSOL)
+///   4. Close cdp_wsol_vault → pool_vault (unwraps WSOL to native SOL)
+///   5. CPI rise_staking::receive_cdp_liquidity to register new liquid buffer
+pub fn handler(
+    ctx: Context<RedeemCollateralForLiquidity>,
+    amount: u64,
+    route_plan_data: Vec<u8>,
+    quoted_out_amount: u64,
+    slippage_bps: u16,
+) -> Result<()> {
     require!(amount > 0, CdpError::ZeroAmount);
 
     // ── Condition check — only callable during a genuine liquidity shortfall ──
@@ -30,27 +35,27 @@ pub fn handler(ctx: Context<RedeemCollateralForLiquidity>, amount: u64) -> Resul
         CdpError::LiquidityRedemptionNotNeeded
     );
 
-    // ── Verify vault has enough tokens to seize ───────────────────────────────
     require!(
         ctx.accounts.collateral_vault.amount >= amount,
         CdpError::InsufficientExcess
     );
 
-    // ── Transfer collateral → seizure vault ──────────────────────────────────
+    // ── Vault signer seeds ───────────────────────────────────────────────────
     let config_mint_ref = ctx.accounts.collateral_config.mint.as_ref();
     let vault_bump = ctx.bumps.collateral_vault;
-    let seeds = &[b"collateral_vault".as_ref(), config_mint_ref, &[vault_bump]];
-    let signer = &[&seeds[..]];
+    let vault_seeds = &[b"collateral_vault".as_ref(), config_mint_ref, &[vault_bump]];
+    let vault_signer = &[&vault_seeds[..]];
 
+    // ── Transfer collateral → seizure vault ──────────────────────────────────
     token::transfer(
         CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
             Transfer {
-                from: ctx.accounts.collateral_vault.to_account_info(),
-                to: ctx.accounts.cdp_seizure_vault.to_account_info(),
+                from:      ctx.accounts.collateral_vault.to_account_info(),
+                to:        ctx.accounts.cdp_seizure_vault.to_account_info(),
                 authority: ctx.accounts.collateral_vault.to_account_info(),
             },
-            signer,
+            vault_signer,
         ),
         amount,
     )?;
@@ -62,11 +67,62 @@ pub fn handler(ctx: Context<RedeemCollateralForLiquidity>, amount: u64) -> Resul
             .saturating_sub(pool.liquid_buffer_lamports)
     );
 
-    // TODO: Jupiter CPI — swap `amount` tokens from cdp_seizure_vault → SOL.
-    //       After the swap, transfer the SOL output to pool_vault, then call:
-    //       rise_staking::cpi::receive_cdp_liquidity(cpi_ctx, sol_received)
-    //       to register the new SOL as liquid buffer.
-    msg!("TODO: Jupiter swap cdp_seizure_vault → SOL → pool_vault + receive_cdp_liquidity CPI");
+    // ── Jupiter v6 CPI: cdp_seizure_vault → cdp_wsol_vault (WSOL) ────────────
+    // cdp_seizure_vault is owned by collateral_vault — sign with vault seeds.
+    crate::jupiter::shared_accounts_route(
+        &ctx.accounts.jupiter_program,
+        &ctx.accounts.jupiter_program_authority,
+        &ctx.accounts.collateral_vault.to_account_info(),    // user_transfer_authority
+        &ctx.accounts.cdp_seizure_vault.to_account_info(),  // source
+        &ctx.accounts.jupiter_source_token,
+        &ctx.accounts.jupiter_destination_token,
+        &ctx.accounts.cdp_wsol_vault.to_account_info(),     // destination (WSOL)
+        &ctx.accounts.collateral_mint.to_account_info(),
+        &ctx.accounts.wsol_mint.to_account_info(),
+        &ctx.accounts.jupiter_event_authority,
+        &ctx.accounts.token_program.to_account_info(),
+        &route_plan_data,
+        amount,
+        quoted_out_amount,
+        slippage_bps,
+        vault_signer,
+    )?;
+
+    // Record actual WSOL received before closing
+    ctx.accounts.cdp_wsol_vault.reload()?;
+    let sol_received = ctx.accounts.cdp_wsol_vault.amount;
+
+    // ── Unwrap WSOL → native SOL directly into pool_vault ────────────────────
+    let cdp_config_bump = ctx.accounts.cdp_config.bump;
+    let config_seeds = &[b"cdp_config".as_ref(), &[cdp_config_bump]];
+    let config_signer = &[&config_seeds[..]];
+
+    token::close_account(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            CloseAccount {
+                account:     ctx.accounts.cdp_wsol_vault.to_account_info(),
+                destination: ctx.accounts.pool_vault.to_account_info(),
+                authority:   ctx.accounts.cdp_config.to_account_info(),
+            },
+            config_signer,
+        ),
+    )?;
+
+    // ── Register new liquid buffer with the staking program ──────────────────
+    rise_staking::cpi::receive_cdp_liquidity(
+        CpiContext::new(
+            ctx.accounts.staking_program.to_account_info(),
+            rise_staking::cpi::accounts::ReceiveCdpLiquidity {
+                caller:      ctx.accounts.caller.to_account_info(),
+                global_pool: ctx.accounts.global_pool.to_account_info(),
+                pool_vault:  ctx.accounts.pool_vault.to_account_info(),
+            },
+        ),
+        sol_received,
+    )?;
+
+    msg!("Jupiter swap: {} tokens → {} lamports SOL → pool_vault", amount, sol_received);
 
     Ok(())
 }
@@ -74,11 +130,12 @@ pub fn handler(ctx: Context<RedeemCollateralForLiquidity>, amount: u64) -> Resul
 #[derive(Accounts)]
 pub struct RedeemCollateralForLiquidity<'info> {
     /// Permissionless — any caller can trigger when conditions are met.
-    /// Pays rent for cdp_seizure_vault init if first seizure of this token type.
+    /// Pays rent for cdp_wsol_vault / cdp_seizure_vault init if first use.
     #[account(mut)]
     pub caller: Signer<'info>,
 
     /// GlobalPool from staking — read to verify the liquidity shortfall condition.
+    #[account(mut)]
     pub global_pool: Account<'info, GlobalPool>,
 
     #[account(
@@ -89,7 +146,6 @@ pub struct RedeemCollateralForLiquidity<'info> {
 
     pub collateral_mint: Account<'info, Mint>,
 
-    /// Protocol collateral vault — tokens are seized from here.
     #[account(
         mut,
         seeds = [b"collateral_vault", collateral_config.mint.as_ref()],
@@ -98,8 +154,8 @@ pub struct RedeemCollateralForLiquidity<'info> {
     )]
     pub collateral_vault: Account<'info, TokenAccount>,
 
-    /// Holding account for seized tokens awaiting Jupiter conversion.
-    /// Initialized on first seizure of this collateral type.
+    /// Intermediate holding account for seized tokens. Authority = collateral_vault
+    /// so it can sign as user_transfer_authority for Jupiter.
     #[account(
         init_if_needed,
         payer = caller,
@@ -110,6 +166,57 @@ pub struct RedeemCollateralForLiquidity<'info> {
     )]
     pub cdp_seizure_vault: Account<'info, TokenAccount>,
 
+    /// Global CDP config — authority for cdp_wsol_vault.
+    #[account(
+        seeds = [b"cdp_config"],
+        bump = cdp_config.bump
+    )]
+    pub cdp_config: Account<'info, CdpConfig>,
+
+    /// Native SOL (WSOL) mint — Jupiter outputs WSOL which is then unwrapped.
+    pub wsol_mint: Account<'info, Mint>,
+
+    /// Protocol WSOL buffer: receives Jupiter's WSOL output, then closed → pool_vault.
+    #[account(
+        init_if_needed,
+        payer = caller,
+        token::mint = wsol_mint,
+        token::authority = cdp_config,
+        seeds = [b"cdp_wsol_vault"],
+        bump,
+    )]
+    pub cdp_wsol_vault: Account<'info, TokenAccount>,
+
+    /// CHECK: Staking pool SOL vault — receives unwrapped SOL from Jupiter output.
+    #[account(
+        mut,
+        seeds = [b"pool_vault"],
+        seeds::program = rise_staking::ID,
+        bump
+    )]
+    pub pool_vault: UncheckedAccount<'info>,
+
+    pub staking_program: Program<'info, rise_staking::program::RiseStaking>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+
+    // ── Jupiter v6 accounts ──────────────────────────────────────────────────
+
+    /// CHECK: Jupiter v6 program.
+    #[account(address = crate::jupiter::PROGRAM_ID)]
+    pub jupiter_program: AccountInfo<'info>,
+
+    /// CHECK: Jupiter's shared authority PDA.
+    pub jupiter_program_authority: AccountInfo<'info>,
+
+    /// CHECK: Jupiter's event authority PDA.
+    pub jupiter_event_authority: AccountInfo<'info>,
+
+    /// CHECK: Jupiter's shared source token account for this route.
+    #[account(mut)]
+    pub jupiter_source_token: AccountInfo<'info>,
+
+    /// CHECK: Jupiter's shared destination token account for this route.
+    #[account(mut)]
+    pub jupiter_destination_token: AccountInfo<'info>,
 }

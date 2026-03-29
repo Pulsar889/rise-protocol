@@ -55,4 +55,10 @@ pub enum CdpError {
 
     #[msg("Liquidity redemption not needed — liquid buffer covers pending withdrawals")]
     LiquidityRedemptionNotNeeded,
+
+    #[msg("No borrow rewards available to claim")]
+    NoRewardsToClaim,
+
+    #[msg("Borrow rewards not yet initialized")]
+    BorrowRewardsNotInitialized,
 }

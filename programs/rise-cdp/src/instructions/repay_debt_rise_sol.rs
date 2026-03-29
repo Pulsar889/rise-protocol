@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer, Burn, Mint};
-use crate::state::{CdpPosition, CollateralConfig, CdpConfig};
+use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig};
 use crate::errors::CdpError;
 use rise_staking::program::RiseStaking;
 
@@ -19,10 +19,28 @@ use rise_staking::program::RiseStaking;
 /// accrues to all riseSOL holders implicitly (via reduced supply / higher backing
 /// ratio) rather than flowing explicitly to cdp_fee_vault as it does in the
 /// SOL/token repayment path. This is the natural trade-off of accepting riseSOL.
-pub fn handler(ctx: Context<RepayDebtRiseSol>, payment_rise_sol: u64) -> Result<()> {
+/// `shortfall_route_plan_data` / `shortfall_quoted_out` / `shortfall_slippage_bps` are used
+/// only on full repayment when seized collateral must be bought back via Jupiter.
+/// The SOL source for the buyback is `treasury_vault`, but transferring from it requires
+/// a new `rise_staking::withdraw_treasury_for_cdp_buyback` instruction (not yet built).
+/// Pass empty bytes / 0 for these params in normal (no-shortfall) usage.
+pub fn handler(
+    ctx: Context<RepayDebtRiseSol>,
+    payment_rise_sol: u64,
+    shortfall_route_plan_data: Vec<u8>,
+    shortfall_quoted_out: u64,
+    shortfall_slippage_bps: u16,
+) -> Result<()> {
     require!(payment_rise_sol > 0, CdpError::ZeroAmount);
 
     let position = &mut ctx.accounts.position;
+
+    // ── Settle borrow rewards before reducing debt ────────────────────────────
+    {
+        let reward_per_token = ctx.accounts.borrow_rewards_config.reward_per_token;
+        let current_debt = position.rise_sol_debt_principal;
+        ctx.accounts.borrow_rewards.settle(reward_per_token, current_debt)?;
+    }
 
     // ── Cap repayment at total debt ──────────────────────────────────────────
     let total_owed = position.total_rise_sol_owed().ok_or(CdpError::MathOverflow)?;
@@ -63,6 +81,18 @@ pub fn handler(ctx: Context<RepayDebtRiseSol>, payment_rise_sol: u64) -> Result<
         cdp_config.cdp_rise_sol_minted = cdp_config
             .cdp_rise_sol_minted
             .saturating_sub(principal_cleared as u128);
+
+        // Keep borrow rewards debt tracker in sync.
+        ctx.accounts.borrow_rewards_config.total_cdp_debt = ctx
+            .accounts.borrow_rewards_config.total_cdp_debt
+            .saturating_sub(principal_cleared);
+    }
+
+    // ── Re-sync per-position reward_debt to new principal ────────────────────
+    {
+        let reward_per_token = ctx.accounts.borrow_rewards_config.reward_per_token;
+        let new_principal = position.rise_sol_debt_principal;
+        ctx.accounts.borrow_rewards.sync_debt(reward_per_token, new_principal)?;
     }
 
     // ── Burn cleared riseSOL from borrower ──────────────────────────────────────
@@ -137,13 +167,21 @@ pub fn handler(ctx: Context<RepayDebtRiseSol>, payment_rise_sol: u64) -> Result<
         // exists to divert), so the protocol treasury covers the buyback cost.
         // This is an unlikely edge case — treasury absorbs the small cost.
         if shortfall > 0 {
-            // TODO: Jupiter v6 CPI
-            // 1. Calculate shortfall SOL value: shortfall_tokens * collateral_price / sol_price
-            // 2. Transfer shortfall_sol from treasury_vault to this program (system transfer)
-            // 3. Jupiter swap: shortfall_sol → collateral tokens
-            // 4. Transfer collateral tokens to borrower_collateral_account
+            // Collateral was previously seized; the protocol owes the borrower `shortfall` tokens.
+            // Buyback flow once `rise_staking::withdraw_treasury_for_cdp_buyback` is built:
+            //   1. Compute shortfall_sol = shortfall * collateral_price / sol_price (via Pyth)
+            //   2. CPI rise_staking::withdraw_treasury_for_cdp_buyback(shortfall_sol)
+            //      → transfers shortfall_sol from treasury_vault to cdp_wsol_vault
+            //   3. token::sync_native(cdp_wsol_vault) to reflect new lamports as WSOL balance
+            //   4. Jupiter swap: cdp_wsol_vault (WSOL) → borrower_collateral_account
+            //      using shortfall_route_plan / shortfall_quoted_out / shortfall_slippage_bps
+            //   5. Transfer collateral tokens to borrower_collateral_account
+            //
+            // Params are already in the instruction signature; Jupiter accounts need to be
+            // added to RepayDebtRiseSol once the treasury CPI is built.
+            let _ = (&shortfall_route_plan_data, shortfall_quoted_out, shortfall_slippage_bps);
             msg!(
-                "STUB: Collateral shortfall of {} tokens — Jupiter buyback from treasury pending",
+                "WARN: Collateral shortfall of {} tokens — treasury buyback pending rise_staking update",
                 shortfall
             );
         }
@@ -245,4 +283,21 @@ pub struct RepayDebtRiseSol<'info> {
     pub staking_program: Program<'info, RiseStaking>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+
+    /// Global borrow rewards config — total_cdp_debt decremented on principal paydown.
+    #[account(
+        mut,
+        seeds = [b"borrow_rewards_config"],
+        bump = borrow_rewards_config.bump
+    )]
+    pub borrow_rewards_config: Account<'info, BorrowRewardsConfig>,
+
+    /// Per-position borrow rewards — settled before debt is reduced.
+    #[account(
+        mut,
+        seeds = [b"borrow_rewards", position.key().as_ref()],
+        bump = borrow_rewards.bump,
+        constraint = borrow_rewards.position == position.key()
+    )]
+    pub borrow_rewards: Account<'info, BorrowRewards>,
 }

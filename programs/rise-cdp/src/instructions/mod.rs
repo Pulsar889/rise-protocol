@@ -15,6 +15,9 @@ pub mod borrow_more;
 pub mod collect_cdp_fees;
 pub mod repay_debt_rise_sol;
 pub mod redeem_collateral_for_liquidity;
+pub mod initialize_borrow_rewards;
+pub mod checkpoint_borrow_rewards;
+pub mod claim_borrow_rewards;
 
 pub use initialize_cdp_config::*;
 pub use update_debt_ceiling::*;
@@ -33,3 +36,6 @@ pub use borrow_more::*;
 pub use collect_cdp_fees::*;
 pub use repay_debt_rise_sol::*;
 pub use redeem_collateral_for_liquidity::*;
+pub use initialize_borrow_rewards::*;
+pub use checkpoint_borrow_rewards::*;
+pub use claim_borrow_rewards::*;

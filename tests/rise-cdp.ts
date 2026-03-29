@@ -7,15 +7,21 @@ import {
   SystemProgram,
   LAMPORTS_PER_SOL,
   Keypair,
+  Transaction,
 } from "@solana/web3.js";
 import {
   TOKEN_PROGRAM_ID,
   createMint,
   createAccount,
   mintTo,
+  mintToChecked,
   getAccount,
+  getOrCreateAssociatedTokenAccount,
+  ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { assert } from "chai";
+
+const MIN_DEPLOYER_BALANCE = 2 * LAMPORTS_PER_SOL; // 2 SOL covers all devnet test transactions
 
 describe("rise-cdp", () => {
   const provider = anchor.AnchorProvider.env();
@@ -27,6 +33,7 @@ describe("rise-cdp", () => {
 
   let usdcMint: PublicKey;
   let riseSolMint: PublicKey;
+  let riseMint: PublicKey;             // RISE governance/rewards token
   let globalPool: PublicKey;
   let poolVault: PublicKey;
   let cdpConfig: PublicKey;
@@ -36,8 +43,11 @@ describe("rise-cdp", () => {
   let position: PublicKey;
   let userUsdcAccount: PublicKey;
   let userRiseSolAccount: PublicKey;
+  let userRiseAccount: PublicKey;      // borrower's RISE token account for claiming
   let usdcPriceFeed: Keypair;
   let solPriceFeed: Keypair;
+  let borrowRewardsConfig: PublicKey;
+  let borrowRewardsVault: PublicKey;
 
   const NONCE = 0;
 
@@ -52,6 +62,12 @@ describe("rise-cdp", () => {
   const USDC_SLIPPAGE_BPS = 50;
 
   before(async () => {
+    const balance = await provider.connection.getBalance(authority.publicKey);
+    assert.isTrue(
+      balance >= MIN_DEPLOYER_BALANCE,
+      `Deployer wallet needs ≥ 2 SOL for devnet tests, current balance: ${balance / LAMPORTS_PER_SOL} SOL`
+    );
+
     // Derive staking PDAs
     [globalPool] = PublicKey.findProgramAddressSync(
       [Buffer.from("global_pool")],
@@ -66,17 +82,20 @@ describe("rise-cdp", () => {
     usdcPriceFeed = Keypair.generate();
     solPriceFeed = Keypair.generate();
 
-    // Fund price feeds with lamports representing prices
-    // USDC = $1.00 = 1_000_000 (6 decimal scale)
-    // SOL  = $150.00 = 150_000_000
-    const sig1 = await provider.connection.requestAirdrop(
-      usdcPriceFeed.publicKey, 1_000_000
-    );
-    const sig2 = await provider.connection.requestAirdrop(
-      solPriceFeed.publicKey, 150_000_000
-    );
-    await provider.connection.confirmTransaction(sig1);
-    await provider.connection.confirmTransaction(sig2);
+    // Fund mock price feeds by transferring from the deployer wallet.
+    // Lamport balance is used as price: USDC = $1.00 = 1_000_000, SOL = $150.00 = 150_000_000.
+    const feedFundTx = new Transaction()
+      .add(SystemProgram.transfer({
+        fromPubkey: authority.publicKey,
+        toPubkey: usdcPriceFeed.publicKey,
+        lamports: 1_000_000,
+      }))
+      .add(SystemProgram.transfer({
+        fromPubkey: authority.publicKey,
+        toPubkey: solPriceFeed.publicKey,
+        lamports: 150_000_000,
+      }));
+    await provider.sendAndConfirm(feedFundTx);
 
     // Create USDC mock mint (6 decimals)
     usdcMint = await createMint(
@@ -87,14 +106,22 @@ describe("rise-cdp", () => {
       6
     );
 
-    // Create riseSOL mint with pool PDA as authority
-    riseSolMint = await createMint(
-      provider.connection,
-      authority.payer,
-      globalPool,
-      null,
-      9
-    );
+    // Use the existing GlobalPool's riseSOL mint if the pool is already initialized,
+    // otherwise create a new mint with the pool PDA as authority.
+    const poolInfo = await provider.connection.getAccountInfo(globalPool);
+    if (poolInfo !== null) {
+      const poolData = await stakingProgram.account.globalPool.fetch(globalPool);
+      riseSolMint = poolData.riseSolMint;
+      console.log("Reusing existing riseSOL mint:", riseSolMint.toBase58());
+    } else {
+      riseSolMint = await createMint(
+        provider.connection,
+        authority.payer,
+        globalPool,
+        null,
+        9
+      );
+    }
 
     // Create user token accounts
     userUsdcAccount = await createAccount(
@@ -104,12 +131,19 @@ describe("rise-cdp", () => {
       authority.publicKey
     );
 
-    userRiseSolAccount = await createAccount(
-      provider.connection,
-      authority.payer,
-      riseSolMint,
-      authority.publicKey
-    );
+    try {
+      userRiseSolAccount = await createAccount(
+        provider.connection,
+        authority.payer,
+        riseSolMint,
+        authority.publicKey
+      );
+    } catch {
+      const accounts = await provider.connection.getTokenAccountsByOwner(
+        authority.publicKey, { mint: riseSolMint }
+      );
+      userRiseSolAccount = accounts.value[0].pubkey;
+    }
 
     // Mint 10,000 USDC to user
     await mintTo(
@@ -151,8 +185,30 @@ describe("rise-cdp", () => {
       cdpProgram.programId
     );
 
+    // Create RISE governance token mint (used for borrow rewards)
+    riseMint = await createMint(
+      provider.connection,
+      authority.payer,
+      authority.publicKey,
+      null,
+      6
+    );
+
+    // userRiseAccount is created in the borrow_rewards describe block
+
+    // Derive borrow rewards PDAs
+    [borrowRewardsConfig] = PublicKey.findProgramAddressSync(
+      [Buffer.from("borrow_rewards_config")],
+      cdpProgram.programId
+    );
+    [borrowRewardsVault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("borrow_rewards_vault")],
+      cdpProgram.programId
+    );
+
     console.log("USDC mint:", usdcMint.toBase58());
     console.log("riseSOL mint:", riseSolMint.toBase58());
+    console.log("RISE mint:", riseMint.toBase58());
     console.log("Collateral config PDA:", collateralConfig.toBase58());
     console.log("Position PDA:", position.toBase58());
   });
@@ -192,6 +248,40 @@ describe("rise-cdp", () => {
       })
       .rpc();
     console.log("CDP config initialized");
+  });
+
+  it("Initializes borrow rewards config", async () => {
+    const existing = await provider.connection.getAccountInfo(borrowRewardsConfig);
+    if (existing) {
+      console.log("Borrow rewards config already initialized — skipping");
+      return;
+    }
+
+    // 1_000_000 RISE per epoch (6 decimals), ~1 week in slots
+    const epochEmissions = new anchor.BN(1_000_000 * 1_000_000);
+    const slotsPerEpoch = new anchor.BN(604_800);
+
+    await cdpProgram.methods
+      .initializeBorrowRewards(epochEmissions, slotsPerEpoch)
+      .accounts({
+        authority: authority.publicKey,
+        cdpConfig,
+        borrowRewardsConfig,
+        rewardsVault: borrowRewardsVault,
+        riseMint,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+
+    const cfg = await cdpProgram.account.borrowRewardsConfig.fetch(borrowRewardsConfig);
+    assert.equal(cfg.riseMint.toBase58(), riseMint.toBase58());
+    assert.equal(cfg.epochEmissions.toNumber(), epochEmissions.toNumber());
+    assert.equal(cfg.totalCdpDebt.toNumber(), 0);
+    assert.equal(cfg.rewardPerToken.toString(), "0");
+
+    console.log("Borrow rewards config initialized");
+    console.log("Epoch emissions:", cfg.epochEmissions.toString(), "RISE");
   });
 
   it("Initializes USDC collateral config", async () => {
@@ -266,10 +356,26 @@ describe("rise-cdp", () => {
       })
       .rpc();
 
+    const configReset = await cdpProgram.account.collateralConfig.fetch(collateralConfig);
+    assert.equal(configReset.baseRateBps, USDC_BASE_RATE_BPS);
     console.log("Base rate reset to:", USDC_BASE_RATE_BPS, "bps");
   });
 
   it("Deactivates and reactivates a collateral type", async () => {
+    // If a previous run left collateral deactivated, reactivate it first so we
+    // start from a known active state.
+    const startState = await cdpProgram.account.collateralConfig.fetch(collateralConfig);
+    if (!startState.active) {
+      await cdpProgram.methods
+        .updateCollateralConfig(null, null, null, null, null, null, null, null, true)
+        .accounts({
+          authority: authority.publicKey,
+          collateralConfig: collateralConfig,
+        })
+        .rpc();
+      console.log("Collateral was already deactivated — reactivated to reset state");
+    }
+
     // Deactivate
     await cdpProgram.methods
       .updateCollateralConfig(null, null, null, null, null, null, null, null, false)
@@ -395,6 +501,8 @@ describe("rise-cdp", () => {
     let stakingTreasury: PublicKey;
     let solPaymentConfig: PublicKey;
 
+    let borrowRewards: PublicKey;
+
     before(async () => {
       [cdpFeeVault] = PublicKey.findProgramAddressSync(
         [Buffer.from("cdp_fee_vault")],
@@ -410,6 +518,12 @@ describe("rise-cdp", () => {
       );
       [solPaymentConfig] = PublicKey.findProgramAddressSync(
         [Buffer.from("payment_config"), anchor.web3.SystemProgram.programId.toBuffer()],
+        cdpProgram.programId
+      );
+
+      // borrow_rewards is seeded from the position PDA (derived at top-level before)
+      [borrowRewards] = PublicKey.findProgramAddressSync(
+        [Buffer.from("borrow_rewards"), position.toBuffer()],
         cdpProgram.programId
       );
     });
@@ -453,11 +567,17 @@ describe("rise-cdp", () => {
       // Stake SOL to establish staking_rise_sol_supply > 0 so the debt ceiling is non-zero.
       // With debt_ceiling_multiplier=3x and MAX_SINGLE_LOAN_BPS=500 (5%):
       //   single_loan_cap = supply * 3 * 0.05 = supply * 0.15
-      //   To borrow 5 SOL: supply >= 5 / 0.15 ≈ 33.3 SOL → stake 40 SOL.
+      //   To borrow 5 SOL: supply >= 5 / 0.15 ≈ 33.3 SOL → stake 40 SOL on localnet.
+      //   On devnet where the wallet has limited SOL, set BOOTSTRAP_SOL=5 in the environment
+      //   (devnet state persists across runs so the supply accumulates over time).
+      const bootstrapSol = process.env.BOOTSTRAP_SOL ? parseInt(process.env.BOOTSTRAP_SOL) : 40;
+      const bootstrapLamports = bootstrapSol * LAMPORTS_PER_SOL;
       const poolData = await stakingProgram.account.globalPool.fetch(globalPool);
-      if (poolData.stakingRiseSolSupply.toNumber() === 0) {
+      const currentStake = poolData.totalSolStaked.toNumber();
+      if (currentStake < bootstrapLamports) {
+        const topUp = bootstrapLamports - currentStake;
         await stakingProgram.methods
-          .stakeSol(new anchor.BN(40 * LAMPORTS_PER_SOL))
+          .stakeSol(new anchor.BN(topUp))
           .accounts({
             user: authority.publicKey,
             pool: globalPool,
@@ -468,7 +588,13 @@ describe("rise-cdp", () => {
             tokenProgram: TOKEN_PROGRAM_ID,
           })
           .rpc();
-        console.log("Staked 40 SOL to bootstrap staking supply for debt ceiling");
+        console.log(
+          `Staked ${topUp / LAMPORTS_PER_SOL} SOL to reach ${bootstrapSol} SOL bootstrap target`
+        );
+      } else {
+        console.log(
+          `Pool already has ${currentStake / LAMPORTS_PER_SOL} SOL staked — skipping bootstrap`
+        );
       }
 
       // Register cdpConfig on the staking program so mint_for_cdp CPI is authorized.
@@ -518,6 +644,8 @@ describe("rise-cdp", () => {
           stakingProgram: stakingProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
+          borrowRewardsConfig,
+          borrowRewards,
         })
         .rpc();
 
@@ -547,6 +675,8 @@ describe("rise-cdp", () => {
           borrowerRiseSolAccount: userRiseSolAccount,
           stakingProgram: stakingProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
+          borrowRewardsConfig,
+          borrowRewards,
         })
         .rpc();
 
@@ -595,6 +725,7 @@ describe("rise-cdp", () => {
           collateralConfig,
           paymentConfig: solPaymentConfig,
           globalPool,
+          cdpConfig,
           cdpFeeVault,
           poolVault,
           collateralVault,
@@ -606,6 +737,8 @@ describe("rise-cdp", () => {
           paymentVault: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
+          borrowRewardsConfig,
+          borrowRewards,
         })
         .rpc();
 
@@ -663,6 +796,7 @@ describe("rise-cdp", () => {
           collateralConfig,
           paymentConfig: solPaymentConfig,
           globalPool,
+          cdpConfig,
           cdpFeeVault,
           poolVault,
           collateralVault,
@@ -674,6 +808,8 @@ describe("rise-cdp", () => {
           paymentVault: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
+          borrowRewardsConfig,
+          borrowRewards,
         })
         .rpc();
 
@@ -714,6 +850,12 @@ describe("rise-cdp", () => {
         cdpProgram.programId
       );
 
+      // borrow_rewards for this position
+      const [borrowRewards1] = PublicKey.findProgramAddressSync(
+        [Buffer.from("borrow_rewards"), position1.toBuffer()],
+        cdpProgram.programId
+      );
+
       // Open the position: 500 USDC collateral, borrow 2 riseSOL
       const collateralAmount = 500 * 1_000_000;
       const riseSolToBorrow = 2_000_000_000;
@@ -734,6 +876,8 @@ describe("rise-cdp", () => {
             collateralConfig,
             collateralMint: usdcMint,
             borrowerCollateralAccount: userUsdcAccount,
+            borrowRewardsConfig,
+            borrowRewards: borrowRewards1,
             collateralVault,
             pythPriceFeed: usdcPriceFeed.publicKey,
             solPriceFeed: solPriceFeed.publicKey,
@@ -784,6 +928,8 @@ describe("rise-cdp", () => {
           stakingProgram: stakingProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
+          borrowRewardsConfig,
+          borrowRewards: borrowRewards1,
         })
         .rpc();
 
@@ -822,6 +968,8 @@ describe("rise-cdp", () => {
           stakingProgram: stakingProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
+          borrowRewardsConfig,
+          borrowRewards: borrowRewards1,
         })
         .rpc();
 
@@ -839,6 +987,346 @@ describe("rise-cdp", () => {
         Number(collateralAfter - collateralBefore),
         "USDC base units"
       );
+    });
+  });
+
+  describe("borrow_rewards", () => {
+    // Uses a fresh position with nonce 2 so it doesn't collide with earlier tests.
+    const NONCE_BR = 2;
+    let brPosition: PublicKey;
+    let brBorrowRewards: PublicKey;
+    let brUserRiseAccount: PublicKey;
+
+    before(async () => {
+      [brPosition] = PublicKey.findProgramAddressSync(
+        [Buffer.from("cdp_position"), authority.publicKey.toBuffer(), Buffer.from([NONCE_BR])],
+        cdpProgram.programId
+      );
+      [brBorrowRewards] = PublicKey.findProgramAddressSync(
+        [Buffer.from("borrow_rewards"), brPosition.toBuffer()],
+        cdpProgram.programId
+      );
+
+      // Create (or reuse) an associated token account for the borrower to receive RISE
+      const riseAta = await getOrCreateAssociatedTokenAccount(
+        provider.connection,
+        authority.payer,
+        riseMint,
+        authority.publicKey
+      );
+      brUserRiseAccount = riseAta.address;
+      userRiseAccount = brUserRiseAccount; // expose to outer scope for claim test
+
+      // Ensure collateral is active — the "Deactivates and reactivates" test can leave it
+      // deactivated if its assertion fails before the reactivation step runs.
+      const collateralState = await cdpProgram.account.collateralConfig.fetch(collateralConfig);
+      if (!collateralState.active) {
+        await cdpProgram.methods
+          .updateCollateralConfig(null, null, null, null, null, null, null, null, true)
+          .accounts({
+            authority: authority.publicKey,
+            collateralConfig,
+          })
+          .rpc();
+        console.log("borrow_rewards: reactivated collateral after earlier test left it deactivated");
+      }
+    });
+
+    it("Initialize borrow rewards config stores correct state", async () => {
+      const cfg = await cdpProgram.account.borrowRewardsConfig.fetch(borrowRewardsConfig);
+      assert.equal(cfg.riseMint.toBase58(), riseMint.toBase58());
+      assert.equal(cfg.rewardsVault.toBase58(), borrowRewardsVault.toBase58());
+      assert.equal(cfg.rewardPerToken.toString(), "0");
+      assert.equal(cfg.totalCdpDebt.toNumber(), 0);
+      console.log("BorrowRewardsConfig confirmed on-chain");
+    });
+
+    it("Open position creates BorrowRewards with correct reward_debt", async () => {
+      // Ensure the collateral vault is initialised (may have been skipped if already exists)
+      const vaultInfo = await provider.connection.getAccountInfo(collateralVault);
+      if (!vaultInfo) {
+        await cdpProgram.methods
+          .initializeCollateralVault()
+          .accounts({
+            authority: authority.publicKey,
+            collateralConfig,
+            collateralMint: usdcMint,
+            collateralVault,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+          })
+          .rpc();
+      }
+
+      const collateralAmount = 500 * 1_000_000; // 500 USDC
+      const riseSolToBorrow = 2_000_000_000;    // 2 riseSOL
+
+      // Ensure this position doesn't already exist
+      const posInfo = await provider.connection.getAccountInfo(brPosition);
+      if (posInfo) {
+        console.log("brPosition already exists — skipping open");
+      } else {
+        await cdpProgram.methods
+          .openPosition(
+            new anchor.BN(collateralAmount),
+            new anchor.BN(riseSolToBorrow),
+            NONCE_BR
+          )
+          .accounts({
+            borrower: authority.publicKey,
+            cdpConfig,
+            globalPool,
+            position: brPosition,
+            collateralConfig,
+            collateralMint: usdcMint,
+            borrowerCollateralAccount: userUsdcAccount,
+            collateralVault,
+            pythPriceFeed: usdcPriceFeed.publicKey,
+            solPriceFeed: solPriceFeed.publicKey,
+            riseSolMint,
+            borrowerRiseSolAccount: userRiseSolAccount,
+            stakingProgram: stakingProgram.programId,
+            tokenProgram: TOKEN_PROGRAM_ID,
+            systemProgram: SystemProgram.programId,
+            borrowRewardsConfig,
+            borrowRewards: brBorrowRewards,
+          })
+          .rpc();
+      }
+
+      const cfg = await cdpProgram.account.borrowRewardsConfig.fetch(borrowRewardsConfig);
+      const br = await cdpProgram.account.borrowRewards.fetch(brBorrowRewards);
+
+      // reward_per_token is 0 at init, so reward_debt should be 0
+      assert.equal(br.owner.toBase58(), authority.publicKey.toBase58());
+      assert.equal(br.position.toBase58(), brPosition.toBase58());
+      assert.equal(br.pendingRewards.toNumber(), 0);
+      assert.equal(br.totalClaimed.toNumber(), 0);
+      // reward_debt = debt * 0 / SCALE = 0
+      assert.equal(br.rewardDebt.toString(), "0");
+
+      // totalCdpDebt should include this position's borrow
+      assert.isTrue(
+        cfg.totalCdpDebt.toNumber() >= riseSolToBorrow,
+        "totalCdpDebt should be at least the amount borrowed"
+      );
+
+      console.log("BorrowRewards initialized with reward_debt:", br.rewardDebt.toString());
+      console.log("totalCdpDebt:", cfg.totalCdpDebt.toString());
+    });
+
+    it("Checkpoint updates reward_per_token correctly", async () => {
+      const cfgBefore = await cdpProgram.account.borrowRewardsConfig.fetch(borrowRewardsConfig);
+
+      await cdpProgram.methods
+        .checkpointBorrowRewards()
+        .accounts({
+          caller: authority.publicKey,
+          borrowRewardsConfig,
+        })
+        .rpc();
+
+      const cfgAfter = await cdpProgram.account.borrowRewardsConfig.fetch(borrowRewardsConfig);
+
+      // After a checkpoint with totalCdpDebt > 0, reward_per_token should be >= before
+      assert.isTrue(
+        cfgAfter.rewardPerToken.gte(cfgBefore.rewardPerToken),
+        "reward_per_token should be non-decreasing"
+      );
+      assert.isTrue(
+        cfgAfter.lastCheckpointSlot.toNumber() >= cfgBefore.lastCheckpointSlot.toNumber(),
+        "lastCheckpointSlot should advance"
+      );
+
+      console.log("reward_per_token before:", cfgBefore.rewardPerToken.toString());
+      console.log("reward_per_token after: ", cfgAfter.rewardPerToken.toString());
+    });
+
+    it("Borrow more correctly settles and updates reward_debt", async () => {
+      const brBefore = await cdpProgram.account.borrowRewards.fetch(brBorrowRewards);
+      const posBefore = await cdpProgram.account.cdpPosition.fetch(brPosition);
+      const cfgBefore = await cdpProgram.account.borrowRewardsConfig.fetch(borrowRewardsConfig);
+
+      const additionalBorrow = 500_000_000; // 0.5 riseSOL
+
+      await cdpProgram.methods
+        .borrowMore(new anchor.BN(additionalBorrow))
+        .accounts({
+          borrower: authority.publicKey,
+          position: brPosition,
+          collateralConfig,
+          globalPool,
+          cdpConfig,
+          solPriceFeed: solPriceFeed.publicKey,
+          riseSolMint,
+          borrowerRiseSolAccount: userRiseSolAccount,
+          stakingProgram: stakingProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          borrowRewardsConfig,
+          borrowRewards: brBorrowRewards,
+        })
+        .rpc();
+
+      const brAfter = await cdpProgram.account.borrowRewards.fetch(brBorrowRewards);
+      const posAfter = await cdpProgram.account.cdpPosition.fetch(brPosition);
+      const cfgAfter = await cdpProgram.account.borrowRewardsConfig.fetch(borrowRewardsConfig);
+
+      // principal should have increased
+      assert.equal(
+        posAfter.riseSolDebtPrincipal.toNumber(),
+        posBefore.riseSolDebtPrincipal.toNumber() + additionalBorrow
+      );
+
+      // totalCdpDebt should also have increased
+      assert.equal(
+        cfgAfter.totalCdpDebt.toNumber(),
+        cfgBefore.totalCdpDebt.toNumber() + additionalBorrow
+      );
+
+      // reward_debt should reflect new debt * reward_per_token
+      const expectedDebt = (BigInt(posAfter.riseSolDebtPrincipal.toString()) *
+        BigInt(cfgAfter.rewardPerToken.toString())) /
+        BigInt("1000000000000");
+      assert.equal(
+        brAfter.rewardDebt.toString(),
+        expectedDebt.toString(),
+        "reward_debt should equal new_debt * reward_per_token / REWARD_SCALE"
+      );
+
+      console.log("borrow_more: principal", posBefore.riseSolDebtPrincipal.toString(),
+        "→", posAfter.riseSolDebtPrincipal.toString());
+      console.log("reward_debt:", brBefore.rewardDebt.toString(), "→", brAfter.rewardDebt.toString());
+    });
+
+    it("Claim transfers correct RISE amount to borrower", async () => {
+      // Mint some RISE tokens directly to the rewards vault so the claim can succeed
+      await mintTo(
+        provider.connection,
+        authority.payer,
+        riseMint,
+        borrowRewardsVault,
+        authority.publicKey,
+        10_000 * 1_000_000  // 10,000 RISE
+      );
+
+      // Advance the accumulator by checkpointing again
+      await cdpProgram.methods
+        .checkpointBorrowRewards()
+        .accounts({
+          caller: authority.publicKey,
+          borrowRewardsConfig,
+        })
+        .rpc();
+
+      const brBefore = await cdpProgram.account.borrowRewards.fetch(brBorrowRewards);
+      const riseBefore = (await getAccount(provider.connection, brUserRiseAccount)).amount;
+
+      await cdpProgram.methods
+        .claimBorrowRewards(NONCE_BR)
+        .accounts({
+          borrower: authority.publicKey,
+          position: brPosition,
+          borrowRewards: brBorrowRewards,
+          borrowRewardsConfig,
+          rewardsVault: borrowRewardsVault,
+          borrowerRiseAccount: brUserRiseAccount,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+
+      const brAfter = await cdpProgram.account.borrowRewards.fetch(brBorrowRewards);
+      const riseAfter = (await getAccount(provider.connection, brUserRiseAccount)).amount;
+
+      assert.equal(brAfter.pendingRewards.toNumber(), 0, "pending_rewards should be 0 after claim");
+      assert.isTrue(
+        brAfter.totalClaimed.toNumber() > 0,
+        "total_claimed should be > 0 after claim"
+      );
+      assert.isTrue(
+        riseAfter > riseBefore,
+        "Borrower RISE balance should increase after claim"
+      );
+
+      console.log("RISE claimed:", Number(riseAfter - riseBefore), "units");
+      console.log("total_claimed:", brAfter.totalClaimed.toString());
+    });
+
+    it("Repay settles rewards before reducing debt", async () => {
+      const [cdpFeeVault] = PublicKey.findProgramAddressSync(
+        [Buffer.from("cdp_fee_vault")],
+        cdpProgram.programId
+      );
+      const [poolVault] = PublicKey.findProgramAddressSync(
+        [Buffer.from("pool_vault")],
+        stakingProgram.programId
+      );
+      const [solPaymentConfig] = PublicKey.findProgramAddressSync(
+        [Buffer.from("payment_config"), anchor.web3.SystemProgram.programId.toBuffer()],
+        cdpProgram.programId
+      );
+
+      const brBefore = await cdpProgram.account.borrowRewards.fetch(brBorrowRewards);
+      const posBefore = await cdpProgram.account.cdpPosition.fetch(brPosition);
+      const cfgBefore = await cdpProgram.account.borrowRewardsConfig.fetch(borrowRewardsConfig);
+
+      // Partial repay with 0.5 SOL
+      const paymentLamports = 0.5 * anchor.web3.LAMPORTS_PER_SOL;
+
+      await cdpProgram.methods
+        .repayDebt(new anchor.BN(paymentLamports))
+        .accounts({
+          borrower: authority.publicKey,
+          position: brPosition,
+          collateralConfig,
+          paymentConfig: solPaymentConfig,
+          globalPool,
+          cdpConfig,
+          cdpFeeVault,
+          poolVault,
+          collateralVault,
+          borrowerCollateralAccount: userUsdcAccount,
+          pythPriceFeed: solPriceFeed.publicKey,
+          solPriceFeed: solPriceFeed.publicKey,
+          paymentMint: null,
+          borrowerPaymentAccount: null,
+          paymentVault: null,
+          tokenProgram: TOKEN_PROGRAM_ID,
+          systemProgram: SystemProgram.programId,
+          borrowRewardsConfig,
+          borrowRewards: brBorrowRewards,
+        })
+        .rpc();
+
+      const brAfter = await cdpProgram.account.borrowRewards.fetch(brBorrowRewards);
+      const posAfter = await cdpProgram.account.cdpPosition.fetch(brPosition);
+      const cfgAfter = await cdpProgram.account.borrowRewardsConfig.fetch(borrowRewardsConfig);
+
+      // principal should have decreased
+      assert.isTrue(
+        posAfter.riseSolDebtPrincipal.toNumber() < posBefore.riseSolDebtPrincipal.toNumber(),
+        "Principal should decrease after partial repay"
+      );
+
+      // totalCdpDebt should also have decreased
+      assert.isTrue(
+        cfgAfter.totalCdpDebt.toNumber() <= cfgBefore.totalCdpDebt.toNumber(),
+        "totalCdpDebt should not increase after repay"
+      );
+
+      // reward_debt should reflect new lower debt
+      const expectedDebt = (BigInt(posAfter.riseSolDebtPrincipal.toString()) *
+        BigInt(cfgAfter.rewardPerToken.toString())) /
+        BigInt("1000000000000");
+      assert.equal(
+        brAfter.rewardDebt.toString(),
+        expectedDebt.toString(),
+        "reward_debt should reflect reduced debt after repay"
+      );
+
+      console.log("Repay: principal", posBefore.riseSolDebtPrincipal.toString(),
+        "→", posAfter.riseSolDebtPrincipal.toString());
+      console.log("totalCdpDebt:", cfgBefore.totalCdpDebt.toString(),
+        "→", cfgAfter.totalCdpDebt.toString());
     });
   });
 

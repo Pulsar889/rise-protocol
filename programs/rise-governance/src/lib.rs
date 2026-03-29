@@ -69,4 +69,16 @@ pub mod rise_governance {
     ) -> Result<()> {
         instructions::claim_revenue_share::handler(ctx, treasury_vault_bump)
     }
+
+    pub fn update_governance_config(
+        ctx: Context<UpdateGovernanceConfig>,
+        proposal_threshold: Option<u64>,
+        quorum_bps: Option<u16>,
+        voting_period_slots: Option<u64>,
+        timelock_slots: Option<u64>,
+    ) -> Result<()> {
+        instructions::update_governance_config::handler(
+            ctx, proposal_threshold, quorum_bps, voting_period_slots, timelock_slots,
+        )
+    }
 }

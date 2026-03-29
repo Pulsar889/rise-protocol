@@ -15,6 +15,8 @@ import {
 } from "@solana/spl-token";
 import { assert } from "chai";
 
+const MIN_DEPLOYER_BALANCE = LAMPORTS_PER_SOL; // 1 SOL
+
 describe("rise-staking", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
@@ -31,6 +33,12 @@ describe("rise-staking", () => {
   let teamWallet: Keypair;
 
   before(async () => {
+    const balance = await provider.connection.getBalance(authority.publicKey);
+    assert.isTrue(
+      balance >= MIN_DEPLOYER_BALANCE,
+      `Deployer wallet needs ≥ 1 SOL for devnet tests, current balance: ${balance / LAMPORTS_PER_SOL} SOL`
+    );
+
     [globalPool] = PublicKey.findProgramAddressSync(
       [Buffer.from("global_pool")],
       program.programId
@@ -48,15 +56,8 @@ describe("rise-staking", () => {
       program.programId
     );
 
-    // Generate a team wallet keypair
+    // Generate a team wallet keypair — used only as a stored address, needs no SOL
     teamWallet = Keypair.generate();
-
-    // Fund team wallet so it can receive SOL
-    const sig = await provider.connection.requestAirdrop(
-      teamWallet.publicKey,
-      LAMPORTS_PER_SOL
-    );
-    await provider.connection.confirmTransaction(sig);
 
     const poolInfo = await provider.connection.getAccountInfo(globalPool);
     if (poolInfo !== null) {
@@ -175,6 +176,9 @@ describe("rise-staking", () => {
   });
 
   it("Updates treasury team fee", async () => {
+    const before = await program.account.protocolTreasury.fetch(treasury);
+    const originalFee = before.teamFeeBps;
+
     await program.methods
       .updateTreasuryConfig(
         null,   // team_wallet — no change
@@ -191,16 +195,18 @@ describe("rise-staking", () => {
     assert.equal(treasuryAccount.teamFeeBps, 800);
     console.log("Team fee updated to:", treasuryAccount.teamFeeBps, "bps");
 
-    // Reset back to 5%
+    // Reset back to original
     await program.methods
-      .updateTreasuryConfig(null, 500, null)
+      .updateTreasuryConfig(null, originalFee, null)
       .accounts({
         authority: authority.publicKey,
         treasury: treasury,
       })
       .rpc();
 
-    console.log("Team fee reset to 500 bps");
+    const treasuryReset = await program.account.protocolTreasury.fetch(treasury);
+    assert.equal(treasuryReset.teamFeeBps, originalFee);
+    console.log("Team fee reset to", originalFee, "bps");
   });
 
   it("Updates treasury veRISE share", async () => {
@@ -229,6 +235,8 @@ describe("rise-staking", () => {
       })
       .rpc();
 
+    const treasuryReset = await program.account.protocolTreasury.fetch(treasury);
+    assert.equal(treasuryReset.veriseShareBps, 5000);
     console.log("veRISE share reset to 5000 bps");
   });
 

@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
-use crate::state::{CdpPosition, CollateralConfig, CdpConfig};
+use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig};
 use crate::errors::CdpError;
 use rise_staking::state::GlobalPool;
 use rise_staking::program::RiseStaking;
@@ -89,6 +89,13 @@ pub fn handler(ctx: Context<BorrowMore>, additional_rise_sol: u64) -> Result<()>
 
     cdp_config.cdp_rise_sol_minted = new_minted;
 
+    // ── Settle borrow rewards before changing debt ────────────────────────────
+    {
+        let reward_per_token = ctx.accounts.borrow_rewards_config.reward_per_token;
+        let current_debt = position.rise_sol_debt_principal;
+        ctx.accounts.borrow_rewards.settle(reward_per_token, current_debt)?;
+    }
+
     // ── Update position ───────────────────────────────────────────────────────
     position.rise_sol_debt_principal = position
         .rise_sol_debt_principal
@@ -101,6 +108,17 @@ pub fn handler(ctx: Context<BorrowMore>, additional_rise_sol: u64) -> Result<()>
         config.liquidation_threshold_bps,
     )
     .ok_or(CdpError::MathOverflow)?;
+
+    // ── Sync reward_debt to reflect new debt ──────────────────────────────────
+    {
+        let reward_per_token = ctx.accounts.borrow_rewards_config.reward_per_token;
+        let new_principal = position.rise_sol_debt_principal;
+        ctx.accounts.borrow_rewards.sync_debt(reward_per_token, new_principal)?;
+        ctx.accounts.borrow_rewards_config.total_cdp_debt = ctx
+            .accounts.borrow_rewards_config.total_cdp_debt
+            .checked_add(additional_rise_sol)
+            .ok_or(CdpError::MathOverflow)?;
+    }
 
     // ── Mint additional riseSOL to borrower via CPI to staking program ──────
     let cdp_config_bump = ctx.accounts.cdp_config.bump;
@@ -146,17 +164,17 @@ pub struct BorrowMore<'info> {
         constraint = position.owner == borrower.key(),
         constraint = position.is_open @ CdpError::PositionClosed
     )]
-    pub position: Account<'info, CdpPosition>,
+    pub position: Box<Account<'info, CdpPosition>>,
 
     #[account(
         seeds = [b"collateral_config", collateral_config.mint.as_ref()],
         bump = collateral_config.bump,
         constraint = collateral_config.mint == position.collateral_mint
     )]
-    pub collateral_config: Account<'info, CollateralConfig>,
+    pub collateral_config: Box<Account<'info, CollateralConfig>>,
 
     /// GlobalPool from the staking program — read for exchange rate and staking supply.
-    pub global_pool: Account<'info, GlobalPool>,
+    pub global_pool: Box<Account<'info, GlobalPool>>,
 
     /// Global CDP config — tracks total CDP riseSOL minted and debt ceiling.
     #[account(
@@ -164,7 +182,7 @@ pub struct BorrowMore<'info> {
         seeds = [b"cdp_config"],
         bump = cdp_config.bump
     )]
-    pub cdp_config: Account<'info, CdpConfig>,
+    pub cdp_config: Box<Account<'info, CdpConfig>>,
 
     /// CHECK: Pyth price feed for SOL/USD.
     pub sol_price_feed: AccountInfo<'info>,
@@ -174,7 +192,7 @@ pub struct BorrowMore<'info> {
         mut,
         address = global_pool.rise_sol_mint
     )]
-    pub rise_sol_mint: Account<'info, Mint>,
+    pub rise_sol_mint: Box<Account<'info, Mint>>,
 
     /// Borrower's riseSOL token account to receive minted tokens.
     #[account(
@@ -182,8 +200,25 @@ pub struct BorrowMore<'info> {
         constraint = borrower_rise_sol_account.mint == global_pool.rise_sol_mint,
         constraint = borrower_rise_sol_account.owner == borrower.key()
     )]
-    pub borrower_rise_sol_account: Account<'info, TokenAccount>,
+    pub borrower_rise_sol_account: Box<Account<'info, TokenAccount>>,
 
     pub staking_program: Program<'info, RiseStaking>,
     pub token_program: Program<'info, Token>,
+
+    /// Global borrow rewards config — updated with new total_cdp_debt.
+    #[account(
+        mut,
+        seeds = [b"borrow_rewards_config"],
+        bump = borrow_rewards_config.bump
+    )]
+    pub borrow_rewards_config: Box<Account<'info, BorrowRewardsConfig>>,
+
+    /// Per-position borrow rewards — settled before debt increases.
+    #[account(
+        mut,
+        seeds = [b"borrow_rewards", position.key().as_ref()],
+        bump = borrow_rewards.bump,
+        constraint = borrow_rewards.position == position.key()
+    )]
+    pub borrow_rewards: Box<Account<'info, BorrowRewards>>,
 }
