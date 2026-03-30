@@ -18,7 +18,7 @@ import * as path from "path";
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 
-const RPC = "https://api.devnet.solana.com";
+const RPC = "https://devnet.helius-rpc.com/?api-key=787be2ec-9299-40c2-af00-e559a4715fa1";
 const CDP_PROGRAM_ID = new PublicKey("3snPJTuZP9XHNciH7Q5KZzsvk2doxpuoYqWXf8JofEPR");
 
 // Keypair path

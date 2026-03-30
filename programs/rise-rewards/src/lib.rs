@@ -61,4 +61,16 @@ pub mod rise_rewards {
     ) -> Result<()> {
         instructions::set_epoch_emissions::handler(ctx, epoch_emissions)
     }
+
+    /// Close the rewards config, reclaiming rent. Authority only.
+    /// Use this to reset and re-initialize with a new RISE mint.
+    pub fn close_rewards_config(ctx: Context<CloseRewardsConfig>) -> Result<()> {
+        instructions::close_rewards_config::handler(ctx)
+    }
+
+    /// Create the RISE vault that backs LP gauge reward payouts. Authority only.
+    /// Call once after initialize_rewards.
+    pub fn initialize_rewards_vault(ctx: Context<InitializeRewardsVault>) -> Result<()> {
+        instructions::initialize_rewards_vault::handler(ctx)
+    }
 }

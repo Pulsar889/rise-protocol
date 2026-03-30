@@ -195,4 +195,11 @@ pub mod rise_cdp {
     ) -> Result<()> {
         instructions::claim_borrow_rewards::handler(ctx)
     }
+
+    /// Close borrow_rewards_config and borrow_rewards_vault. Authority only.
+    /// Burns any remaining tokens in the vault before closing. Use this to
+    /// reset and re-initialize with a new RISE mint.
+    pub fn close_borrow_rewards(ctx: Context<CloseBorrowRewards>) -> Result<()> {
+        instructions::close_borrow_rewards::handler(ctx)
+    }
 }
