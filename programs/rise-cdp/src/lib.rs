@@ -6,6 +6,7 @@ pub mod state;
 pub mod instructions;
 pub mod errors;
 pub mod jupiter;
+pub mod pyth;
 
 use instructions::*;
 

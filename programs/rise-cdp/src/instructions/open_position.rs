@@ -185,15 +185,8 @@ pub fn handler(
     Ok(())
 }
 
-/// Read and validate a Pyth price feed.
-/// Returns price scaled by CollateralConfig::PRICE_SCALE (6 decimals).
 fn get_pyth_price(price_feed: &AccountInfo) -> Result<u128> {
-    // In production this uses the Pyth SDK to parse the price account.
-    // For now we read a mock price stored in the account's lamports
-    // as a placeholder. This will be replaced with real Pyth integration.
-    let lamports = price_feed.lamports();
-    require!(lamports > 0, CdpError::InvalidOraclePrice);
-    Ok(lamports as u128)
+    crate::pyth::get_pyth_price(price_feed)
 }
 
 #[derive(Accounts)]

@@ -22,7 +22,7 @@ pub fn handler(ctx: Context<BorrowMore>, additional_rise_sol: u64) -> Result<()>
     let config = &ctx.accounts.collateral_config;
 
     // ── LTV check with new total debt ────────────────────────────────────────
-    let sol_usd_price = get_mock_price(&ctx.accounts.sol_price_feed)?;
+    let sol_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_feed)?;
     let exchange_rate = ctx.accounts.global_pool.exchange_rate;
     let rate_scale = GlobalPool::RATE_SCALE;
 
@@ -146,11 +146,6 @@ pub fn handler(ctx: Context<BorrowMore>, additional_rise_sol: u64) -> Result<()>
     Ok(())
 }
 
-fn get_mock_price(price_feed: &AccountInfo) -> Result<u128> {
-    let lamports = price_feed.lamports();
-    require!(lamports > 0, CdpError::InvalidOraclePrice);
-    Ok(lamports as u128)
-}
 
 #[derive(Accounts)]
 pub struct BorrowMore<'info> {

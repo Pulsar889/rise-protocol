@@ -38,8 +38,8 @@ pub fn handler(ctx: Context<AddCollateral>, amount: u64) -> Result<()> {
         .ok_or(CdpError::MathOverflow)?;
 
     // Get updated collateral price and recompute health factor
-    let collateral_usd_price = get_mock_price(&ctx.accounts.pyth_price_feed)?;
-    let sol_usd_price = get_mock_price(&ctx.accounts.sol_price_feed)?;
+    let collateral_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.pyth_price_feed)?;
+    let sol_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_feed)?;
 
     let token_decimals = ctx.accounts.collateral_mint.decimals;
     let decimal_scale = 10u128.pow(token_decimals as u32);
@@ -72,11 +72,6 @@ pub fn handler(ctx: Context<AddCollateral>, amount: u64) -> Result<()> {
     Ok(())
 }
 
-fn get_mock_price(price_feed: &AccountInfo) -> Result<u128> {
-    let lamports = price_feed.lamports();
-    require!(lamports > 0, CdpError::InvalidOraclePrice);
-    Ok(lamports as u128)
-}
 
 #[derive(Accounts)]
 pub struct AddCollateral<'info> {
