@@ -6,6 +6,7 @@ pub mod withdraw_lp;
 pub mod claim_rewards;
 pub mod set_epoch_emissions;
 pub mod close_rewards_config;
+pub mod close_gauge;
 pub mod initialize_rewards_vault;
 
 pub use initialize_rewards::*;
@@ -16,4 +17,5 @@ pub use withdraw_lp::*;
 pub use claim_rewards::*;
 pub use set_epoch_emissions::*;
 pub use close_rewards_config::*;
+pub use close_gauge::*;
 pub use initialize_rewards_vault::*;

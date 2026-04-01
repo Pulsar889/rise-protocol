@@ -73,4 +73,10 @@ pub mod rise_rewards {
     pub fn initialize_rewards_vault(ctx: Context<InitializeRewardsVault>) -> Result<()> {
         instructions::initialize_rewards_vault::handler(ctx)
     }
+
+    /// Close an individual Gauge account, reclaiming rent. Authority only.
+    /// Use this to clean up orphaned gauges after a config reset.
+    pub fn close_gauge(ctx: Context<CloseGauge>) -> Result<()> {
+        instructions::close_gauge::handler(ctx)
+    }
 }
