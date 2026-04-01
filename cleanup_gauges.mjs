@@ -37,23 +37,27 @@ const program    = new Program(idl, provider);
 const [config] = PublicKey.findProgramAddressSync([Buffer.from("rewards_config")], REWARDS_PROG_ID);
 
 // ── Step 1: Close all existing gauge accounts ─────────────────────────────────
+// Fetch by discriminator (raw) to avoid deserialization errors when struct size changed.
 console.log("[1/2] Fetching and closing all gauge accounts...");
-const allGauges = await program.account.gauge.all();
-console.log(`  Found ${allGauges.length} gauge(s) to close.`);
+const gaugeDisc = program.coder.accounts.memcmp("gauge");
+const rawAccounts = await connection.getProgramAccounts(REWARDS_PROG_ID, {
+  filters: [{ memcmp: { offset: 0, bytes: gaugeDisc.bytes } }],
+});
+console.log(`  Found ${rawAccounts.length} gauge(s) to close.`);
 
-for (const g of allGauges) {
+for (const { pubkey } of rawAccounts) {
   try {
     const tx = await program.methods
       .closeGauge()
       .accounts({
         authority: keypair.publicKey,
         config,
-        gauge: g.publicKey,
+        gauge: pubkey,
       })
       .rpc();
-    console.log(`  Closed gauge #${g.account.index} (${g.publicKey.toBase58().slice(0,8)}...) Tx: ${tx.slice(0,16)}...`);
+    console.log(`  Closed ${pubkey.toBase58().slice(0,8)}... Tx: ${tx.slice(0,16)}...`);
   } catch (err) {
-    console.error(`  Failed to close gauge #${g.account.index}:`, err.message);
+    console.error(`  Failed to close ${pubkey.toBase58().slice(0,8)}...:`, err.message);
   }
 }
 

@@ -60,12 +60,16 @@ pub struct Gauge {
     /// Total RISE distributed to this gauge all time.
     pub total_distributed: u64,
 
+    /// Emissions accumulated from epochs where total_lp_deposited == 0.
+    /// Added to the next epoch's allocation when deposits exist.
+    pub pending_emissions: u64,
+
     /// Bump seed.
     pub bump: u8,
 }
 
 impl Gauge {
-    pub const SIZE: usize = 8 + 32 + 8 + 2 + 1 + 16 + 8 + 8 + 8 + 1;
+    pub const SIZE: usize = 8 + 32 + 8 + 2 + 1 + 16 + 8 + 8 + 8 + 8 + 1;
 
     /// Scale factor for reward_per_token precision
     pub const REWARD_SCALE: u128 = 1_000_000_000_000;
