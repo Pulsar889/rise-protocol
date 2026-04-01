@@ -8,6 +8,7 @@ pub mod set_epoch_emissions;
 pub mod close_rewards_config;
 pub mod close_gauge;
 pub mod initialize_rewards_vault;
+pub mod set_gauge_weight;
 
 pub use initialize_rewards::*;
 pub use create_gauge::*;
@@ -19,3 +20,4 @@ pub use set_epoch_emissions::*;
 pub use close_rewards_config::*;
 pub use close_gauge::*;
 pub use initialize_rewards_vault::*;
+pub use set_gauge_weight::*;

@@ -79,4 +79,10 @@ pub mod rise_rewards {
     pub fn close_gauge(ctx: Context<CloseGauge>) -> Result<()> {
         instructions::close_gauge::handler(ctx)
     }
+
+    /// Authority-only: set a gauge's weight after tallying gauge votes off-chain.
+    /// Call once per epoch for each gauge after the voting period ends.
+    pub fn set_gauge_weight(ctx: Context<SetGaugeWeight>, weight_bps: u16) -> Result<()> {
+        instructions::set_gauge_weight::handler(ctx, weight_bps)
+    }
 }

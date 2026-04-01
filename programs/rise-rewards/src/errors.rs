@@ -22,4 +22,7 @@ pub enum RewardsError {
 
     #[msg("Insufficient LP balance")]
     InsufficientBalance,
+
+    #[msg("Weight basis points cannot exceed 10000")]
+    InvalidWeight,
 }
