@@ -31,4 +31,7 @@ pub enum StakingError {
 
     #[msg("Caller is not authorized to perform this action")]
     Unauthorized,
+
+    #[msg("GlobalPool has already been migrated to the latest size")]
+    AlreadyMigrated,
 }

@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
-use anchor_spl::token::{self, Token, TokenAccount, Transfer as TokenTransfer, Mint, CloseAccount};
+use anchor_spl::token::{self, Token, TokenAccount, Transfer as TokenTransfer, Mint, CloseAccount, SyncNative};
 use crate::state::{CdpPosition, CollateralConfig, PaymentConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig};
 use crate::errors::CdpError;
 use rise_staking::state::GlobalPool;
@@ -17,16 +17,18 @@ use rise_staking::state::GlobalPool;
 ///
 /// Interest is cleared before principal (standard lending convention).
 /// On full repayment the position is closed and collateral returned to the borrower.
-///
-/// For SPL payments: `route_plan_data` is Borsh-serialized `Vec<RoutePlanStep>` from Jupiter.
-/// For native SOL: pass empty bytes / 0 — Jupiter accounts are still required in the
-/// instruction but the CPI is skipped.
+/// If collateral was previously seized (via redeem_collateral_for_liquidity), a second Jupiter
+/// swap uses `shortfall_route_plan_data` to buy back the owed tokens from `shortfall_sol`
+/// diverted from principal. Pass empty bytes / 0 for shortfall params when no shortfall is expected.
 pub fn handler(
     ctx: Context<RepayDebt>,
     payment_amount: u64,
     route_plan_data: Vec<u8>,
     quoted_out_amount: u64,
     slippage_bps: u16,
+    shortfall_route_plan_data: Vec<u8>,
+    shortfall_quoted_out: u64,
+    shortfall_slippage_bps: u16,
 ) -> Result<()> {
     require!(payment_amount > 0, CdpError::ZeroAmount);
 
@@ -155,55 +157,6 @@ pub fn handler(
 
     let principal_sol = cleared_sol.saturating_sub(interest_sol);
 
-    // ── Route payment ───────────────────────────────────────────────────────
-    if is_native_sol {
-        // Borrower transfers SOL directly to each vault.
-        if interest_sol > 0 {
-            system_program::transfer(
-                CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
-                    system_program::Transfer {
-                        from: ctx.accounts.borrower.to_account_info(),
-                        to:   ctx.accounts.cdp_fee_vault.to_account_info(),
-                    },
-                ),
-                interest_sol,
-            )?;
-        }
-        if principal_sol > 0 {
-            system_program::transfer(
-                CpiContext::new(
-                    ctx.accounts.system_program.to_account_info(),
-                    system_program::Transfer {
-                        from: ctx.accounts.borrower.to_account_info(),
-                        to:   ctx.accounts.pool_vault.to_account_info(),
-                    },
-                ),
-                principal_sol,
-            )?;
-        }
-    } else {
-        // SPL path: SOL is already in cdp_fee_vault (from WSOL close above).
-        // Route principal portion → pool_vault; interest stays in cdp_fee_vault.
-        if principal_sol > 0 {
-            let fee_vault_bump = ctx.bumps.cdp_fee_vault;
-            let fee_seeds = &[b"cdp_fee_vault".as_ref(), &[fee_vault_bump]];
-            let fee_signer = &[&fee_seeds[..]];
-
-            system_program::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.system_program.to_account_info(),
-                    system_program::Transfer {
-                        from: ctx.accounts.cdp_fee_vault.to_account_info(),
-                        to:   ctx.accounts.pool_vault.to_account_info(),
-                    },
-                    fee_signer,
-                ),
-                principal_sol,
-            )?;
-        }
-    }
-
     // ── Decrement global CDP minted counter by principal cleared ────────────
     if principal_cleared_rise_sol > 0 {
         let cdp_config = &mut ctx.accounts.cdp_config;
@@ -223,10 +176,121 @@ pub fn handler(
         ctx.accounts.borrow_rewards.sync_debt(reward_per_token, new_principal)?;
     }
 
-    // ── Full repayment: return collateral and close position ─────────────────
+    // ── Pre-compute collateral shortfall before routing ───────────────────────
+    // Done here so routing amounts can be adjusted before any SOL transfers.
     let is_fully_repaid =
         position.interest_accrued == 0 && position.rise_sol_debt_principal == 0;
 
+    let (shortfall_tokens, available_collateral, shortfall_sol_divert) = if is_fully_repaid {
+        let owed = position.collateral_amount_original;
+        let available = ctx.accounts.collateral_vault.amount.min(owed);
+        let sf_tokens = owed.saturating_sub(available);
+
+        let sf_sol = if sf_tokens > 0 && !shortfall_route_plan_data.is_empty() {
+            let coll_price = crate::pyth::get_pyth_price(&ctx.accounts.pyth_price_feed)?;
+            let sol_price  = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_feed)?;
+            let decimals   = ctx.accounts.collateral_mint.decimals;
+            let dec_scale  = 10u128.pow(decimals as u32);
+
+            // shortfall_usd (micro-USD) = sf_tokens * coll_price / decimal_scale
+            let sf_usd = (sf_tokens as u128)
+                .checked_mul(coll_price).ok_or(CdpError::MathOverflow)?
+                .checked_div(dec_scale).ok_or(CdpError::MathOverflow)?;
+
+            // shortfall_sol (lamports) = sf_usd * 1e9 / sol_price
+            let sf_sol_raw = sf_usd
+                .checked_mul(1_000_000_000u128).ok_or(CdpError::MathOverflow)?
+                .checked_div(sol_price).ok_or(CdpError::MathOverflow)? as u64;
+
+            sf_sol_raw.min(principal_sol) // can't divert more than what's going to pool
+        } else {
+            0u64
+        };
+
+        (sf_tokens, available, sf_sol)
+    } else {
+        (0u64, 0u64, 0u64)
+    };
+
+    let principal_to_pool = principal_sol.saturating_sub(shortfall_sol_divert);
+
+    // ── Route payment ───────────────────────────────────────────────────────
+    if is_native_sol {
+        // Borrower transfers SOL directly to each destination.
+        if interest_sol > 0 {
+            system_program::transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.borrower.to_account_info(),
+                        to:   ctx.accounts.cdp_fee_vault.to_account_info(),
+                    },
+                ),
+                interest_sol,
+            )?;
+        }
+        if principal_to_pool > 0 {
+            system_program::transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.borrower.to_account_info(),
+                        to:   ctx.accounts.pool_vault.to_account_info(),
+                    },
+                ),
+                principal_to_pool,
+            )?;
+        }
+        if shortfall_sol_divert > 0 {
+            // Transfer shortfall SOL directly into cdp_wsol_buyback_vault lamports.
+            // sync_native (below) will update its WSOL balance to match.
+            system_program::transfer(
+                CpiContext::new(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.borrower.to_account_info(),
+                        to:   ctx.accounts.cdp_wsol_buyback_vault.to_account_info(),
+                    },
+                ),
+                shortfall_sol_divert,
+            )?;
+        }
+    } else {
+        // SPL path: all SOL is already in cdp_fee_vault (from WSOL close above).
+        // Route principal to pool_vault; shortfall to buyback vault; interest stays in fee vault.
+        let fee_vault_bump = ctx.bumps.cdp_fee_vault;
+        let fee_seeds = &[b"cdp_fee_vault".as_ref(), &[fee_vault_bump]];
+        let fee_signer = &[&fee_seeds[..]];
+
+        if principal_to_pool > 0 {
+            system_program::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.cdp_fee_vault.to_account_info(),
+                        to:   ctx.accounts.pool_vault.to_account_info(),
+                    },
+                    fee_signer,
+                ),
+                principal_to_pool,
+            )?;
+        }
+        if shortfall_sol_divert > 0 {
+            system_program::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.cdp_fee_vault.to_account_info(),
+                        to:   ctx.accounts.cdp_wsol_buyback_vault.to_account_info(),
+                    },
+                    fee_signer,
+                ),
+                shortfall_sol_divert,
+            )?;
+        }
+    }
+
+    // ── Full repayment: return collateral, execute buyback if needed ──────────
     if is_fully_repaid {
         ctx.accounts.collateral_config.total_collateral_entitlements = ctx
             .accounts
@@ -240,11 +304,7 @@ pub fn handler(
         let vault_seeds = &[b"collateral_vault".as_ref(), config_mint_ref, &[vault_bump]];
         let vault_signer = &[&vault_seeds[..]];
 
-        let owed = position.collateral_amount_original;
-        let available = ctx.accounts.collateral_vault.amount.min(owed);
-        let shortfall = owed.saturating_sub(available);
-
-        if available > 0 {
+        if available_collateral > 0 {
             token::transfer(
                 CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
@@ -255,38 +315,66 @@ pub fn handler(
                     },
                     vault_signer,
                 ),
-                available,
+                available_collateral,
             )?;
         }
 
-        if shortfall > 0 {
-            // Collateral was previously seized for liquidity; the protocol owes `shortfall` tokens.
-            // Buyback requires a second Jupiter route (SOL → collateral direction):
-            //   1. Compute shortfall_sol = shortfall * collateral_price / sol_price
-            //   2. Divert shortfall_sol from principal_sol (reduce pool_vault transfer by that amount)
-            //   3. Transfer shortfall_sol to cdp_wsol_vault + token::sync_native
-            //   4. Jupiter swap: cdp_wsol_vault (WSOL) → borrower_collateral_account
-            //      using a second `shortfall_route_plan_data` param (reverse direction)
-            //
-            // TODO: Add `shortfall_route_plan_data: Vec<u8>` param and implement when needed.
+        if shortfall_tokens > 0 && shortfall_sol_divert > 0 {
+            // Wrap the lamports sitting in cdp_wsol_buyback_vault as WSOL.
+            token::sync_native(CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                SyncNative {
+                    account: ctx.accounts.cdp_wsol_buyback_vault.to_account_info(),
+                },
+            ))?;
+
+            // Jupiter swap: cdp_wsol_buyback_vault (WSOL) → borrower_collateral_account
+            let cdp_config_bump = ctx.accounts.cdp_config.bump;
+            let config_seeds = &[b"cdp_config".as_ref(), &[cdp_config_bump]];
+            let config_signer = &[&config_seeds[..]];
+
+            crate::jupiter::shared_accounts_route(
+                &ctx.accounts.jupiter_program,
+                &ctx.accounts.jupiter_program_authority,
+                &ctx.accounts.cdp_config.to_account_info(),              // PDA authority over vault
+                &ctx.accounts.cdp_wsol_buyback_vault.to_account_info(),  // source (WSOL)
+                &ctx.accounts.shortfall_jupiter_source_token,
+                &ctx.accounts.shortfall_jupiter_destination_token,
+                &ctx.accounts.borrower_collateral_account.to_account_info(), // dest (collateral)
+                &ctx.accounts.wsol_mint.to_account_info(),               // source mint
+                &ctx.accounts.collateral_mint.to_account_info(),         // dest mint
+                &ctx.accounts.jupiter_event_authority,
+                &ctx.accounts.token_program.to_account_info(),
+                &shortfall_route_plan_data,
+                shortfall_sol_divert,
+                shortfall_quoted_out,
+                shortfall_slippage_bps,
+                config_signer,
+            )?;
+
             msg!(
-                "WARN: Collateral shortfall of {} tokens — buyback not yet implemented",
-                shortfall
+                "Shortfall buyback: {} lamports WSOL → collateral tokens for borrower",
+                shortfall_sol_divert
+            );
+        } else if shortfall_tokens > 0 {
+            msg!(
+                "WARN: Collateral shortfall of {} tokens — no route plan provided, skipping buyback",
+                shortfall_tokens
             );
         }
 
         position.is_open = false;
         msg!(
             "Position fully repaid and closed. Collateral returned: {} (shortfall: {})",
-            available,
-            shortfall
+            available_collateral,
+            shortfall_tokens
         );
     }
 
     msg!("riseSOL interest cleared:   {}", interest_cleared_rise_sol);
     msg!("riseSOL principal cleared:  {}", principal_cleared_rise_sol);
     msg!("SOL to fee vault:           {}", interest_sol);
-    msg!("SOL to pool backing:        {}", principal_sol);
+    msg!("SOL to pool backing:        {}", principal_to_pool);
 
     Ok(())
 }
@@ -321,7 +409,7 @@ pub struct RepayDebt<'info> {
 
     pub global_pool: Box<Account<'info, GlobalPool>>,
 
-    /// Global CDP config — tracks total minted; authority for cdp_wsol_vault.
+    /// Global CDP config — tracks total minted; authority for cdp_wsol_vault and cdp_wsol_buyback_vault.
     #[account(
         mut,
         seeds = [b"cdp_config"],
@@ -357,26 +445,29 @@ pub struct RepayDebt<'info> {
     )]
     pub borrower_collateral_account: Box<Account<'info, TokenAccount>>,
 
-    /// CHECK: Pyth price feed — retained for future shortfall buyback SOL calculation.
+    /// Collateral token mint — needed for decimal scaling in shortfall SOL computation.
+    pub collateral_mint: Box<Account<'info, Mint>>,
+
+    /// CHECK: Pyth price feed for the collateral token — used only when shortfall buyback occurs.
     pub pyth_price_feed: AccountInfo<'info>,
 
-    /// CHECK: Pyth price feed for SOL/USD — retained for shortfall buyback.
+    /// CHECK: Pyth price feed for SOL/USD — used only when shortfall buyback occurs.
     pub sol_price_feed: AccountInfo<'info>,
 
     // ── SPL payment token accounts (pass None for native SOL) ────────────────
 
     pub payment_mint: Option<Box<Account<'info, Mint>>>,
 
-    /// Borrower's payment token account — Jupiter's source for the swap.
+    /// Borrower's payment token account — Jupiter's source for the inbound swap.
     #[account(mut)]
     pub borrower_payment_account: Option<Box<Account<'info, TokenAccount>>>,
 
     // ── WSOL / Jupiter accounts ───────────────────────────────────────────────
 
-    /// Native SOL (WSOL) mint — Jupiter outputs WSOL which is then unwrapped.
+    /// Native SOL (WSOL) mint.
     pub wsol_mint: Box<Account<'info, Mint>>,
 
-    /// Protocol WSOL buffer: receives Jupiter's WSOL output, then closed to unwrap.
+    /// Protocol WSOL buffer: receives Jupiter's inbound WSOL output, then closed to unwrap.
     #[account(
         init_if_needed,
         payer = borrower,
@@ -386,6 +477,18 @@ pub struct RepayDebt<'info> {
         bump,
     )]
     pub cdp_wsol_vault: Box<Account<'info, TokenAccount>>,
+
+    /// Protocol WSOL buyback vault: holds WSOL for the reverse swap (WSOL → collateral).
+    /// Only funded when a shortfall buyback is needed on full repayment.
+    #[account(
+        init_if_needed,
+        payer = borrower,
+        token::mint = wsol_mint,
+        token::authority = cdp_config,
+        seeds = [b"cdp_wsol_buyback_vault"],
+        bump,
+    )]
+    pub cdp_wsol_buyback_vault: Box<Account<'info, TokenAccount>>,
 
     /// CHECK: Jupiter v6 program.
     #[account(address = crate::jupiter::PROGRAM_ID)]
@@ -397,13 +500,21 @@ pub struct RepayDebt<'info> {
     /// CHECK: Jupiter's event authority PDA.
     pub jupiter_event_authority: AccountInfo<'info>,
 
-    /// CHECK: Jupiter's shared source token account for this route.
+    /// CHECK: Jupiter's shared source token account for the inbound swap route.
     #[account(mut)]
     pub jupiter_source_token: AccountInfo<'info>,
 
-    /// CHECK: Jupiter's shared destination token account for this route.
+    /// CHECK: Jupiter's shared destination token account for the inbound swap route.
     #[account(mut)]
     pub jupiter_destination_token: AccountInfo<'info>,
+
+    /// CHECK: Jupiter's shared source token account for the shortfall buyback route (WSOL side).
+    #[account(mut)]
+    pub shortfall_jupiter_source_token: AccountInfo<'info>,
+
+    /// CHECK: Jupiter's shared destination token account for the shortfall buyback route (collateral side).
+    #[account(mut)]
+    pub shortfall_jupiter_destination_token: AccountInfo<'info>,
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,

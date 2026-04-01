@@ -9,13 +9,15 @@ const TARGET_EXPO: i32 = -6;
 /// Read a USD price from a Pyth price feed account.
 ///
 /// Returns the price scaled to 1e6 (micro-USD) as a u128.
-/// Uses `get_price_unchecked()` — staleness is not enforced on devnet.
-/// Replace with `get_price_no_older_than` before mainnet.
+/// Enforces a 60-second max price age — rejects stale feeds.
 pub fn get_pyth_price(price_feed: &AccountInfo) -> Result<u128> {
     let feed = pyth_sdk_solana::load_price_feed_from_account_info(price_feed)
         .map_err(|_| error!(CdpError::InvalidOraclePrice))?;
 
-    let price = feed.get_price_unchecked();
+    let clock = Clock::get()?;
+    let price = feed
+        .get_price_no_older_than(clock.unix_timestamp, 60)
+        .ok_or_else(|| error!(CdpError::StaleOraclePrice))?;
 
     require!(price.price > 0, CdpError::InvalidOraclePrice);
 

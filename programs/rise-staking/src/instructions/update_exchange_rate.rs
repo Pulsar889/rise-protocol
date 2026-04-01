@@ -57,6 +57,10 @@ pub fn handler(ctx: Context<UpdateExchangeRate>, stake_lamports_total: u64) -> R
         .ok_or(StakingError::MathOverflow)?;
 
     if pool.staking_rise_sol_supply > 0 {
+        // Snapshot current rate before overwriting so frontend can compute APY.
+        pool.prev_exchange_rate = pool.exchange_rate;
+        pool.prev_rate_update_slot = Clock::get()?.slot;
+
         pool.exchange_rate = pool
             .total_sol_staked
             .checked_mul(GlobalPool::RATE_SCALE)

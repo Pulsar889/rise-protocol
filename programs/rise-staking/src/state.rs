@@ -18,10 +18,19 @@ pub struct GlobalPool {
     /// CDP config PDA authorized to call notify_rise_sol_burned.
     /// Set once by authority via set_cdp_config after both programs are deployed.
     pub cdp_config_pubkey: Pubkey,
+
+    /// Exchange rate recorded at the previous `update_exchange_rate` call.
+    /// Used by the frontend to compute APY: annualize (current - prev) / prev over the slot delta.
+    pub prev_exchange_rate: u128,
+
+    /// Slot at which `prev_exchange_rate` was captured.
+    pub prev_rate_update_slot: u64,
 }
 
 impl GlobalPool {
-    pub const SIZE: usize = 8 + 32 + 32 + 16 + 16 + 16 + 8 + 16 + 2 + 2 + 1 + 16 + 1 + 32;
+    pub const SIZE: usize = 8 + 32 + 32 + 16 + 16 + 16 + 8 + 16 + 2 + 2 + 1 + 16 + 1 + 32
+        + 16  // prev_exchange_rate
+        + 8;  // prev_rate_update_slot
     pub const RATE_SCALE: u128 = 1_000_000_000;
     /// Epochs to wait before a withdrawal ticket can be claimed (~2 Solana epochs).
     pub const UNSTAKE_EPOCH_DELAY: u64 = 2;

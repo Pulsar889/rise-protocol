@@ -113,6 +113,22 @@ pub mod rise_staking {
         instructions::set_cdp_config::handler(ctx, cdp_config_pubkey)
     }
 
+    /// One-time migration: reallocates GlobalPool to accommodate new APY tracking fields.
+    /// Call once after deploying the updated program. Authority-only.
+    pub fn migrate_global_pool(ctx: Context<MigrateGlobalPool>) -> Result<()> {
+        instructions::migrate_global_pool::handler(ctx)
+    }
+
+    /// Called by the CDP program via CPI to fund a collateral buyback from the treasury.
+    /// Transfers `shortfall_sol` lamports from treasury_vault to the CDP's WSOL buyback vault,
+    /// which the CDP program then wraps and swaps → collateral tokens → borrower.
+    pub fn withdraw_treasury_for_cdp_buyback(
+        ctx: Context<WithdrawTreasuryForCdpBuyback>,
+        shortfall_sol: u64,
+    ) -> Result<()> {
+        instructions::withdraw_treasury_for_cdp_buyback::handler(ctx, shortfall_sol)
+    }
+
     /// Called by CDP program via CPI to mint riseSOL to a borrower.
     /// Authorized by cdp_config PDA signer. Does not affect staking_rise_sol_supply —
     /// CDP supply is tracked separately in cdp_rise_sol_minted on the CDP side.

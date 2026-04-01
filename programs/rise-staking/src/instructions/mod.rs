@@ -13,6 +13,8 @@ pub mod notify_rise_sol_burned;
 pub mod set_cdp_config;
 pub mod credit_staking_revenue;
 pub mod mint_for_cdp;
+pub mod withdraw_treasury_for_cdp_buyback;
+pub mod migrate_global_pool;
 
 pub use initialize_pool::*;
 pub use stake_sol::*;
@@ -29,3 +31,5 @@ pub use notify_rise_sol_burned::*;
 pub use set_cdp_config::*;
 pub use credit_staking_revenue::*;
 pub use mint_for_cdp::*;
+pub use withdraw_treasury_for_cdp_buyback::*;
+pub use migrate_global_pool::*;

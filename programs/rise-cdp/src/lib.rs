@@ -110,14 +110,28 @@ pub mod rise_cdp {
     /// Repay all or part of a CDP debt using SOL or an accepted SPL token.
     /// For SPL token payments, `route_plan_data` is Borsh-serialized `Vec<RoutePlanStep>` from
     /// the Jupiter quote API; it is swapped to SOL on-chain. Pass empty / 0 for native SOL.
+    /// `shortfall_route_plan_data` is a second Jupiter route (WSOL → collateral) used only on
+    /// full repayment when collateral was previously seized. Pass empty / 0 in the common case.
     pub fn repay_debt(
         ctx: Context<RepayDebt>,
         payment_amount: u64,
         route_plan_data: Vec<u8>,
         quoted_out_amount: u64,
         slippage_bps: u16,
+        shortfall_route_plan_data: Vec<u8>,
+        shortfall_quoted_out: u64,
+        shortfall_slippage_bps: u16,
     ) -> Result<()> {
-        instructions::repay_debt::handler(ctx, payment_amount, route_plan_data, quoted_out_amount, slippage_bps)
+        instructions::repay_debt::handler(
+            ctx,
+            payment_amount,
+            route_plan_data,
+            quoted_out_amount,
+            slippage_bps,
+            shortfall_route_plan_data,
+            shortfall_quoted_out,
+            shortfall_slippage_bps,
+        )
     }
 
     /// Mint additional riseSOL against an existing open position (subject to max LTV).
