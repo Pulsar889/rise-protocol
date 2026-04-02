@@ -34,4 +34,7 @@ pub enum StakingError {
 
     #[msg("GlobalPool has already been migrated to the latest size")]
     AlreadyMigrated,
+
+    #[msg("No staking rewards to claim")]
+    NoRewardsToClaim,
 }

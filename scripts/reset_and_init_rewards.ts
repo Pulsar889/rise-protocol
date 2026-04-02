@@ -24,12 +24,13 @@ const RISE_MINT  = new PublicKey("2TysJ9Tw5WLh7hBLmC6iZp73bm6akogYEushJEf8K49Q")
 const CDP_PROGRAM_ID     = new PublicKey("3snPJTuZP9XHNciH7Q5KZzsvk2doxpuoYqWXf8JofEPR");
 const REWARDS_PROGRAM_ID = new PublicKey("8d3UidB3Ent4493deoozPYDC48XG2SRj7EdD7xW67uj8");
 
-// Emission parameters (can be updated later via set_epoch_emissions / update)
-// CDP borrow rewards: ~1,903,846 RISE/week over 52 weeks = 99M total
-// LP gauge rewards:   ~1,903,846 RISE/week over 52 weeks = 99M total
-const CDP_EPOCH_EMISSIONS  = BigInt("1903846000000"); // 1,903,846 RISE (6 decimals)
+// Emission parameters — total weekly: ~3,807,692 RISE
+//   Stakers (40%): ~1,523,077 RISE/week  — set via initialize_stake_rewards.ts
+//   Borrowers (30%): ~1,142,308 RISE/week
+//   LP providers (30%): ~1,142,308 RISE/week
+const CDP_EPOCH_EMISSIONS  = BigInt("1142308000000"); // 1,142,308 RISE (6 decimals)
 const CDP_SLOTS_PER_EPOCH  = BigInt("604800");        // ~1 week
-const LP_EPOCH_EMISSIONS   = BigInt("1903846000000"); // 1,903,846 RISE (6 decimals)
+const LP_EPOCH_EMISSIONS   = BigInt("1142308000000"); // 1,142,308 RISE (6 decimals)
 
 const KEYPAIR_PATH = process.env.ANCHOR_WALLET ?? `${process.env.HOME}/.config/solana/id.json`;
 
@@ -141,19 +142,24 @@ async function main() {
   console.log("[OK] initialize_rewards:", sig4.slice(0, 20) + "...");
 
   // ── 5. initialize_rewards_vault ──────────────────────────────────────────────
-  console.log("Initializing LP rewards vault...");
-  const sig5 = await rewards.methods
-    .initializeRewardsVault()
-    .accounts({
-      authority:    payer.publicKey,
-      config:       rewardsConfig,
-      rewardsVault,
-      riseMint:     RISE_MINT,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-    })
-    .rpc();
-  console.log("[OK] initialize_rewards_vault:", sig5.slice(0, 20) + "...");
+  const vaultInfo = await connection.getAccountInfo(rewardsVault);
+  if (vaultInfo) {
+    console.log("[SKIP] rewards_vault already exists — reusing:", rewardsVault.toBase58());
+  } else {
+    console.log("Initializing LP rewards vault...");
+    const sig5 = await rewards.methods
+      .initializeRewardsVault()
+      .accounts({
+        authority:    payer.publicKey,
+        config:       rewardsConfig,
+        rewardsVault,
+        riseMint:     RISE_MINT,
+        tokenProgram: TOKEN_PROGRAM_ID,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+    console.log("[OK] initialize_rewards_vault:", sig5.slice(0, 20) + "...");
+  }
 
   console.log();
   console.log("CDP borrow_rewards_vault: ", borrowRewardsVault.toBase58());

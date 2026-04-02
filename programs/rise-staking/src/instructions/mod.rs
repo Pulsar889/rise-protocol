@@ -15,6 +15,10 @@ pub mod credit_staking_revenue;
 pub mod mint_for_cdp;
 pub mod withdraw_treasury_for_cdp_buyback;
 pub mod migrate_global_pool;
+pub mod initialize_stake_rewards;
+pub mod checkpoint_stake_rewards;
+pub mod register_stake_rewards;
+pub mod claim_stake_rewards;
 
 pub use initialize_pool::*;
 pub use stake_sol::*;
@@ -33,3 +37,7 @@ pub use credit_staking_revenue::*;
 pub use mint_for_cdp::*;
 pub use withdraw_treasury_for_cdp_buyback::*;
 pub use migrate_global_pool::*;
+pub use initialize_stake_rewards::*;
+pub use checkpoint_stake_rewards::*;
+pub use register_stake_rewards::*;
+pub use claim_stake_rewards::*;

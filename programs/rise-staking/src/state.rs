@@ -1,5 +1,102 @@
 use anchor_lang::prelude::*;
 
+/// Global staking-rewards configuration.
+/// Mirrors BorrowRewardsConfig in the CDP program — same slot-based accumulator pattern.
+#[account]
+pub struct StakeRewardsConfig {
+    /// Protocol authority.
+    pub authority: Pubkey,
+    /// RISE token mint.
+    pub rise_mint: Pubkey,
+    /// PDA token account that holds RISE for staker distribution (stored for CPI reference).
+    pub rewards_vault: Pubkey,
+    /// Global accumulator: RISE earned per unit of riseSOL held (scaled by REWARD_SCALE).
+    pub reward_per_token: u128,
+    /// RISE tokens emitted per epoch across all stakers combined.
+    pub epoch_emissions: u64,
+    /// Epoch length in slots (~1 week).
+    pub slots_per_epoch: u64,
+    /// Current total riseSOL in staker hands — updated on every stake/unstake.
+    pub total_staking_supply: u64,
+    /// Slot when the accumulator was last advanced.
+    pub last_checkpoint_slot: u64,
+    /// Bump seed.
+    pub bump: u8,
+}
+
+impl StakeRewardsConfig {
+    pub const SIZE: usize = 8   // discriminator
+        + 32  // authority
+        + 32  // rise_mint
+        + 32  // rewards_vault
+        + 16  // reward_per_token
+        + 8   // epoch_emissions
+        + 8   // slots_per_epoch
+        + 8   // total_staking_supply
+        + 8   // last_checkpoint_slot
+        + 1;  // bump
+
+    /// Precision scale for reward_per_token — 12 decimals, mirrors BorrowRewardsConfig.
+    pub const REWARD_SCALE: u128 = 1_000_000_000_000;
+}
+
+/// Per-user staking rewards tracker. One account per wallet.
+#[account]
+pub struct UserStakeRewards {
+    /// Wallet that owns this tracker.
+    pub owner: Pubkey,
+    /// riseSOL balance at last sync (stake / unstake / claim).
+    pub rise_sol_amount: u64,
+    /// reward_per_token * rise_sol_amount / SCALE at last sync — used to prevent
+    /// collecting rewards for tokens held before the account was opened.
+    pub reward_debt: u128,
+    /// Accumulated unclaimed RISE rewards (settled on each balance change).
+    pub pending_rewards: u64,
+    /// Lifetime RISE claimed.
+    pub total_claimed: u64,
+    /// Bump seed.
+    pub bump: u8,
+}
+
+impl UserStakeRewards {
+    pub const SIZE: usize = 8   // discriminator
+        + 32  // owner
+        + 8   // rise_sol_amount
+        + 16  // reward_debt
+        + 8   // pending_rewards
+        + 8   // total_claimed
+        + 1;  // bump
+
+    /// Settle newly-accrued rewards into `pending_rewards` based on the current
+    /// global `reward_per_token`.  Call this BEFORE changing `rise_sol_amount`.
+    pub fn settle(&mut self, reward_per_token: u128) -> Result<()> {
+        let earned = (self.rise_sol_amount as u128)
+            .checked_mul(reward_per_token)
+            .ok_or(anchor_lang::error!(crate::errors::StakingError::MathOverflow))?
+            .checked_div(StakeRewardsConfig::REWARD_SCALE)
+            .ok_or(anchor_lang::error!(crate::errors::StakingError::MathOverflow))?
+            .saturating_sub(self.reward_debt) as u64;
+
+        self.pending_rewards = self.pending_rewards
+            .checked_add(earned)
+            .ok_or(anchor_lang::error!(crate::errors::StakingError::MathOverflow))?;
+
+        Ok(())
+    }
+
+    /// Update `rise_sol_amount` and recompute `reward_debt` for the new balance.
+    /// Call this AFTER `settle()` and AFTER the new balance is known.
+    pub fn sync_debt(&mut self, reward_per_token: u128, new_amount: u64) -> Result<()> {
+        self.rise_sol_amount = new_amount;
+        self.reward_debt = (new_amount as u128)
+            .checked_mul(reward_per_token)
+            .ok_or(anchor_lang::error!(crate::errors::StakingError::MathOverflow))?
+            .checked_div(StakeRewardsConfig::REWARD_SCALE)
+            .ok_or(anchor_lang::error!(crate::errors::StakingError::MathOverflow))?;
+        Ok(())
+    }
+}
+
 #[account]
 pub struct GlobalPool {
     pub authority: Pubkey,

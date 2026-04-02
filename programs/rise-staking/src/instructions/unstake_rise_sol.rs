@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Burn, Mint, Token, TokenAccount};
-use crate::state::{GlobalPool, WithdrawalTicket};
+use crate::state::{GlobalPool, WithdrawalTicket, StakeRewardsConfig, UserStakeRewards};
 use crate::errors::StakingError;
 
 /// Burns riseSOL and creates a WithdrawalTicket redeemable after UNSTAKE_EPOCH_DELAY epochs.
@@ -8,6 +8,26 @@ use crate::errors::StakingError;
 pub fn handler(ctx: Context<UnstakeRiseSol>, rise_sol_amount: u64, nonce: u8) -> Result<()> {
     require!(!ctx.accounts.pool.paused, StakingError::PoolPaused);
     require!(rise_sol_amount > 0, StakingError::ZeroAmount);
+
+    // ── Stake rewards: settle pending before balance changes ──────────────────
+    if let Some(user_rewards) = ctx.accounts.user_stake_rewards.as_mut() {
+        let reward_per_token = ctx.accounts.stake_rewards_config
+            .as_ref()
+            .map(|c| c.reward_per_token)
+            .unwrap_or(0);
+
+        let old_amount = ctx.accounts.user_rise_sol_account.amount;
+        let new_amount = old_amount.saturating_sub(rise_sol_amount);
+        user_rewards.settle(reward_per_token)?;
+        user_rewards.sync_debt(reward_per_token, new_amount)?;
+    }
+
+    // ── Update stake_rewards_config supply ────────────────────────────────────
+    if let Some(stake_rewards_config) = ctx.accounts.stake_rewards_config.as_mut() {
+        stake_rewards_config.total_staking_supply = stake_rewards_config
+            .total_staking_supply
+            .saturating_sub(rise_sol_amount);
+    }
 
     let pool = &mut ctx.accounts.pool;
 
@@ -105,4 +125,21 @@ pub struct UnstakeRiseSol<'info> {
 
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
+
+    // ── Optional stake rewards accounts ──────────────────────────────────────
+
+    #[account(
+        mut,
+        seeds = [b"stake_rewards_config"],
+        bump = stake_rewards_config.bump
+    )]
+    pub stake_rewards_config: Option<Account<'info, StakeRewardsConfig>>,
+
+    #[account(
+        mut,
+        seeds = [b"user_stake_rewards", user.key().as_ref()],
+        bump = user_stake_rewards.bump,
+        constraint = user_stake_rewards.owner == user.key()
+    )]
+    pub user_stake_rewards: Option<Account<'info, UserStakeRewards>>,
 }

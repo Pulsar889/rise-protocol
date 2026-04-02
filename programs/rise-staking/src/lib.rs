@@ -145,4 +145,30 @@ pub mod rise_staking {
     ) -> Result<()> {
         instructions::credit_staking_revenue::handler(ctx, amount)
     }
+
+    // ── Staking RISE rewards ──────────────────────────────────────────────────
+
+    /// Authority: initialize RISE staking rewards config and vault.
+    pub fn initialize_stake_rewards(
+        ctx: Context<InitializeStakeRewards>,
+        epoch_emissions: u64,
+        slots_per_epoch: u64,
+    ) -> Result<()> {
+        instructions::initialize_stake_rewards::handler(ctx, epoch_emissions, slots_per_epoch)
+    }
+
+    /// Permissionless crank: advance the global staking reward accumulator.
+    pub fn checkpoint_stake_rewards(ctx: Context<CheckpointStakeRewards>) -> Result<()> {
+        instructions::checkpoint_stake_rewards::handler(ctx)
+    }
+
+    /// User: register to receive staking RISE rewards going forward.
+    pub fn register_stake_rewards(ctx: Context<RegisterStakeRewards>) -> Result<()> {
+        instructions::register_stake_rewards::handler(ctx)
+    }
+
+    /// User: claim accumulated RISE staking rewards.
+    pub fn claim_stake_rewards(ctx: Context<ClaimStakeRewards>) -> Result<()> {
+        instructions::claim_stake_rewards::handler(ctx)
+    }
 }

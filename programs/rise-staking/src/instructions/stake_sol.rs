@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 use anchor_spl::token::{self, Mint, MintTo, Token, TokenAccount};
-use crate::state::GlobalPool;
+use crate::state::{GlobalPool, StakeRewardsConfig, UserStakeRewards};
 use crate::errors::StakingError;
 
 pub fn handler(ctx: Context<StakeSol>, lamports: u64) -> Result<()> {
@@ -18,6 +18,27 @@ pub fn handler(ctx: Context<StakeSol>, lamports: u64) -> Result<()> {
 
     require!(rise_sol_to_mint > 0, StakingError::ZeroAmount);
 
+    // ── Stake rewards: settle pending before balance changes ──────────────────
+    if let Some(user_rewards) = ctx.accounts.user_stake_rewards.as_mut() {
+        let reward_per_token = ctx.accounts.stake_rewards_config
+            .as_ref()
+            .map(|c| c.reward_per_token)
+            .unwrap_or(0);
+
+        // Old balance is what the token account currently holds (before this mint)
+        let old_amount = ctx.accounts.user_rise_sol_account.amount;
+        user_rewards.settle(reward_per_token)?;
+        user_rewards.sync_debt(reward_per_token, old_amount + rise_sol_to_mint)?;
+    }
+
+    // ── Update stake_rewards_config supply ────────────────────────────────────
+    if let Some(stake_rewards_config) = ctx.accounts.stake_rewards_config.as_mut() {
+        stake_rewards_config.total_staking_supply = stake_rewards_config
+            .total_staking_supply
+            .checked_add(rise_sol_to_mint)
+            .ok_or(StakingError::MathOverflow)?;
+    }
+
     // Transfer SOL from user to pool vault
     let cpi_ctx = CpiContext::new(
         ctx.accounts.system_program.to_account_info(),
@@ -28,7 +49,7 @@ pub fn handler(ctx: Context<StakeSol>, lamports: u64) -> Result<()> {
     );
     system_program::transfer(cpi_ctx, lamports)?;
 
-    // Now take mutable reference to update state
+    // Update pool state
     {
         let pool = &mut ctx.accounts.pool;
 
@@ -46,7 +67,7 @@ pub fn handler(ctx: Context<StakeSol>, lamports: u64) -> Result<()> {
             .liquid_buffer_lamports
             .checked_add(lamports as u128)
             .ok_or(StakingError::MathOverflow)?;
-    } // mutable borrow ends here
+    }
 
     // Mint riseSOL to user
     let seeds = &[b"global_pool".as_ref(), &[pool_bump]];
@@ -105,4 +126,23 @@ pub struct StakeSol<'info> {
 
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
+
+    // ── Optional stake rewards accounts ──────────────────────────────────────
+    // Pass these to keep rewards accounting up-to-date.  If stake rewards are
+    // not yet initialized (or the user hasn't registered), omit them.
+
+    #[account(
+        mut,
+        seeds = [b"stake_rewards_config"],
+        bump = stake_rewards_config.bump
+    )]
+    pub stake_rewards_config: Option<Account<'info, StakeRewardsConfig>>,
+
+    #[account(
+        mut,
+        seeds = [b"user_stake_rewards", user.key().as_ref()],
+        bump = user_stake_rewards.bump,
+        constraint = user_stake_rewards.owner == user.key()
+    )]
+    pub user_stake_rewards: Option<Account<'info, UserStakeRewards>>,
 }
