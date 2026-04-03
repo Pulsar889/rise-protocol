@@ -166,6 +166,8 @@ describe("rise-staking", () => {
         userRiseSolAccount: userRiseSolAccount,
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
+        stakeRewardsConfig: null,
+        userStakeRewards: null,
       })
       .rpc();
 
@@ -191,7 +193,7 @@ describe("rise-staking", () => {
       })
       .rpc();
 
-    const treasuryAccount = await program.account.protocolTreasury.fetch(treasury);
+    const treasuryAccount = await program.account.protocolTreasury.fetch(treasury, "confirmed");
     assert.equal(treasuryAccount.teamFeeBps, 800);
     console.log("Team fee updated to:", treasuryAccount.teamFeeBps, "bps");
 
@@ -204,7 +206,7 @@ describe("rise-staking", () => {
       })
       .rpc();
 
-    const treasuryReset = await program.account.protocolTreasury.fetch(treasury);
+    const treasuryReset = await program.account.protocolTreasury.fetch(treasury, "confirmed");
     assert.equal(treasuryReset.teamFeeBps, originalFee);
     console.log("Team fee reset to", originalFee, "bps");
   });
@@ -220,9 +222,9 @@ describe("rise-staking", () => {
         authority: authority.publicKey,
         treasury: treasury,
       })
-      .rpc();
+      .rpc({ commitment: "confirmed" });
 
-    const treasuryAccount = await program.account.protocolTreasury.fetch(treasury);
+    const treasuryAccount = await program.account.protocolTreasury.fetch(treasury, "confirmed");
     assert.equal(treasuryAccount.veriseShareBps, 7000);
     console.log("veRISE share updated to:", treasuryAccount.veriseShareBps, "bps");
 
@@ -233,9 +235,9 @@ describe("rise-staking", () => {
         authority: authority.publicKey,
         treasury: treasury,
       })
-      .rpc();
+      .rpc({ commitment: "confirmed" });
 
-    const treasuryReset = await program.account.protocolTreasury.fetch(treasury);
+    const treasuryReset = await program.account.protocolTreasury.fetch(treasury, "confirmed");
     assert.equal(treasuryReset.veriseShareBps, 5000);
     console.log("veRISE share reset to 5000 bps");
   });
@@ -294,6 +296,8 @@ describe("rise-staking", () => {
           userRiseSolAccount: userRiseSolAccount,
           systemProgram: SystemProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
+          stakeRewardsConfig: null,
+          userStakeRewards: null,
         })
         .rpc();
       assert.fail("Should have thrown");

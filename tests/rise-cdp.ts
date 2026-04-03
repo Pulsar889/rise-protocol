@@ -6,7 +6,6 @@ import {
   PublicKey,
   SystemProgram,
   LAMPORTS_PER_SOL,
-  Keypair,
   Transaction,
 } from "@solana/web3.js";
 import {
@@ -17,6 +16,8 @@ import {
   mintToChecked,
   getAccount,
   getOrCreateAssociatedTokenAccount,
+  getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountIdempotentInstruction,
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { assert } from "chai";
@@ -44,8 +45,9 @@ describe("rise-cdp", () => {
   let userUsdcAccount: PublicKey;
   let userRiseSolAccount: PublicKey;
   let userRiseAccount: PublicKey;      // borrower's RISE token account for claiming
-  let usdcPriceFeed: Keypair;
-  let solPriceFeed: Keypair;
+  // Real Pyth devnet price feed accounts (owned by gSbePebfvPy7tRqimPoVecS2UsBvYv46ynrzWocc92s)
+  const usdcPriceFeed = new PublicKey("5SSkXsEKQepHHAewytPVwdej4epN1nxgLVM84L4KXgy7");
+  const solPriceFeed  = new PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix");
   let borrowRewardsConfig: PublicKey;
   let borrowRewardsVault: PublicKey;
 
@@ -78,32 +80,18 @@ describe("rise-cdp", () => {
       stakingProgram.programId
     );
 
-    // Create mock price feed keypairs
-    usdcPriceFeed = Keypair.generate();
-    solPriceFeed = Keypair.generate();
+    // usdcPriceFeed and solPriceFeed are real Pyth devnet accounts — no setup needed.
 
-    // Fund mock price feeds by transferring from the deployer wallet.
-    // Lamport balance is used as price: USDC = $1.00 = 1_000_000, SOL = $150.00 = 150_000_000.
-    const feedFundTx = new Transaction()
-      .add(SystemProgram.transfer({
-        fromPubkey: authority.publicKey,
-        toPubkey: usdcPriceFeed.publicKey,
-        lamports: 1_000_000,
-      }))
-      .add(SystemProgram.transfer({
-        fromPubkey: authority.publicKey,
-        toPubkey: solPriceFeed.publicKey,
-        lamports: 150_000_000,
-      }));
-    await provider.sendAndConfirm(feedFundTx);
-
-    // Create USDC mock mint (6 decimals)
+    // Create USDC mock mint (6 decimals). Use "confirmed" so the mint account is
+    // visible to all RPC nodes before we create an ATA for it.
     usdcMint = await createMint(
       provider.connection,
       authority.payer,
       authority.publicKey,
       null,
-      6
+      6,
+      undefined,
+      { commitment: "confirmed" }
     );
 
     // Use the existing GlobalPool's riseSOL mint if the pool is already initialized,
@@ -123,12 +111,18 @@ describe("rise-cdp", () => {
       );
     }
 
-    // Create user token accounts
-    userUsdcAccount = await createAccount(
-      provider.connection,
-      authority.payer,
-      usdcMint,
-      authority.publicKey
+    // Derive ATA address deterministically then create it idempotently.
+    // Avoids the post-creation fetch race that causes TokenAccountNotFoundError on devnet.
+    userUsdcAccount = getAssociatedTokenAddressSync(usdcMint, authority.publicKey);
+    await provider.sendAndConfirm(
+      new Transaction().add(
+        createAssociatedTokenAccountIdempotentInstruction(
+          authority.publicKey,
+          userUsdcAccount,
+          authority.publicKey,
+          usdcMint
+        )
+      )
     );
 
     try {
@@ -185,15 +179,6 @@ describe("rise-cdp", () => {
       cdpProgram.programId
     );
 
-    // Create RISE governance token mint (used for borrow rewards)
-    riseMint = await createMint(
-      provider.connection,
-      authority.payer,
-      authority.publicKey,
-      null,
-      6
-    );
-
     // userRiseAccount is created in the borrow_rewards describe block
 
     // Derive borrow rewards PDAs
@@ -205,6 +190,23 @@ describe("rise-cdp", () => {
       [Buffer.from("borrow_rewards_vault")],
       cdpProgram.programId
     );
+
+    // Reuse the RISE mint from the on-chain borrowRewardsConfig if it already exists,
+    // otherwise create a fresh one. Keeps riseMint consistent across test runs.
+    const brConfigInfo = await provider.connection.getAccountInfo(borrowRewardsConfig);
+    if (brConfigInfo !== null) {
+      const brConfig = await cdpProgram.account.borrowRewardsConfig.fetch(borrowRewardsConfig);
+      riseMint = brConfig.riseMint;
+      console.log("Reusing existing RISE mint from borrowRewardsConfig:", riseMint.toBase58());
+    } else {
+      riseMint = await createMint(
+        provider.connection,
+        authority.payer,
+        authority.publicKey,
+        null,
+        6
+      );
+    }
 
     console.log("USDC mint:", usdcMint.toBase58());
     console.log("riseSOL mint:", riseSolMint.toBase58());
@@ -300,12 +302,12 @@ describe("rise-cdp", () => {
         authority: authority.publicKey,
         collateralConfig: collateralConfig,
         collateralMint: usdcMint,
-        pythPriceFeed: usdcPriceFeed.publicKey,
+        pythPriceFeed: usdcPriceFeed,
         systemProgram: SystemProgram.programId,
       })
-      .rpc();
+      .rpc({ commitment: "confirmed" });
 
-    const config = await cdpProgram.account.collateralConfig.fetch(collateralConfig);
+    const config = await cdpProgram.account.collateralConfig.fetch(collateralConfig, "confirmed");
 
     assert.equal(config.mint.toBase58(), usdcMint.toBase58());
     assert.equal(config.maxLtvBps, USDC_MAX_LTV_BPS);
@@ -341,9 +343,9 @@ describe("rise-cdp", () => {
         authority: authority.publicKey,
         collateralConfig: collateralConfig,
       })
-      .rpc();
+      .rpc({ commitment: "confirmed" });
 
-    const config = await cdpProgram.account.collateralConfig.fetch(collateralConfig);
+    const config = await cdpProgram.account.collateralConfig.fetch(collateralConfig, "confirmed");
     assert.equal(config.baseRateBps, newRate);
     console.log("Base rate updated to:", config.baseRateBps, "bps");
 
@@ -354,9 +356,9 @@ describe("rise-cdp", () => {
         authority: authority.publicKey,
         collateralConfig: collateralConfig,
       })
-      .rpc();
+      .rpc({ commitment: "confirmed" });
 
-    const configReset = await cdpProgram.account.collateralConfig.fetch(collateralConfig);
+    const configReset = await cdpProgram.account.collateralConfig.fetch(collateralConfig, "confirmed");
     assert.equal(configReset.baseRateBps, USDC_BASE_RATE_BPS);
     console.log("Base rate reset to:", USDC_BASE_RATE_BPS, "bps");
   });
@@ -364,7 +366,7 @@ describe("rise-cdp", () => {
   it("Deactivates and reactivates a collateral type", async () => {
     // If a previous run left collateral deactivated, reactivate it first so we
     // start from a known active state.
-    const startState = await cdpProgram.account.collateralConfig.fetch(collateralConfig);
+    const startState = await cdpProgram.account.collateralConfig.fetch(collateralConfig, "confirmed");
     if (!startState.active) {
       await cdpProgram.methods
         .updateCollateralConfig(null, null, null, null, null, null, null, null, true)
@@ -372,7 +374,7 @@ describe("rise-cdp", () => {
           authority: authority.publicKey,
           collateralConfig: collateralConfig,
         })
-        .rpc();
+        .rpc({ commitment: "confirmed" });
       console.log("Collateral was already deactivated — reactivated to reset state");
     }
 
@@ -383,9 +385,9 @@ describe("rise-cdp", () => {
         authority: authority.publicKey,
         collateralConfig: collateralConfig,
       })
-      .rpc();
+      .rpc({ commitment: "confirmed" });
 
-    let config = await cdpProgram.account.collateralConfig.fetch(collateralConfig);
+    let config = await cdpProgram.account.collateralConfig.fetch(collateralConfig, "confirmed");
     assert.equal(config.active, false);
     console.log("Collateral deactivated");
 
@@ -396,9 +398,9 @@ describe("rise-cdp", () => {
         authority: authority.publicKey,
         collateralConfig: collateralConfig,
       })
-      .rpc();
+      .rpc({ commitment: "confirmed" });
 
-    config = await cdpProgram.account.collateralConfig.fetch(collateralConfig);
+    config = await cdpProgram.account.collateralConfig.fetch(collateralConfig, "confirmed");
     assert.equal(config.active, true);
     console.log("Collateral reactivated");
   });
@@ -448,14 +450,14 @@ describe("rise-cdp", () => {
           authority: authority.publicKey,
           paymentConfig,
           mint: solMintSentinel,
-          pythPriceFeed: solPriceFeed.publicKey,
+          pythPriceFeed: solPriceFeed,
           systemProgram: SystemProgram.programId,
         })
-        .rpc();
+        .rpc({ commitment: "confirmed" });
 
-      const cfg = await cdpProgram.account.paymentConfig.fetch(paymentConfig);
+      const cfg = await cdpProgram.account.paymentConfig.fetch(paymentConfig, "confirmed");
       assert.equal(cfg.mint.toBase58(), solMintSentinel.toBase58());
-      assert.equal(cfg.pythPriceFeed.toBase58(), solPriceFeed.publicKey.toBase58());
+      assert.equal(cfg.pythPriceFeed.toBase58(), solPriceFeed.toBase58());
       assert.equal(cfg.active, true);
 
       console.log("SOL payment config initialized");
@@ -480,12 +482,12 @@ describe("rise-cdp", () => {
           authority: authority.publicKey,
           paymentConfig,
           mint: usdcMint,
-          pythPriceFeed: usdcPriceFeed.publicKey,
+          pythPriceFeed: usdcPriceFeed,
           systemProgram: SystemProgram.programId,
         })
-        .rpc();
+        .rpc({ commitment: "confirmed" });
 
-      const cfg = await cdpProgram.account.paymentConfig.fetch(paymentConfig);
+      const cfg = await cdpProgram.account.paymentConfig.fetch(paymentConfig, "confirmed");
       assert.equal(cfg.mint.toBase58(), usdcMint.toBase58());
       assert.equal(cfg.active, true);
 
@@ -544,7 +546,7 @@ describe("rise-cdp", () => {
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
-        .rpc();
+        .rpc({ commitment: "confirmed" });
       console.log("Collateral vault initialized:", collateralVault.toBase58());
     });
 
@@ -586,6 +588,8 @@ describe("rise-cdp", () => {
             userRiseSolAccount,
             systemProgram: SystemProgram.programId,
             tokenProgram: TOKEN_PROGRAM_ID,
+            stakeRewardsConfig: null,
+            userStakeRewards: null,
           })
           .rpc();
         console.log(
@@ -637,8 +641,8 @@ describe("rise-cdp", () => {
           collateralMint: usdcMint,
           borrowerCollateralAccount: userUsdcAccount,
           collateralVault,
-          pythPriceFeed: usdcPriceFeed.publicKey,
-          solPriceFeed: solPriceFeed.publicKey,
+          pythPriceFeed: usdcPriceFeed,
+          solPriceFeed: solPriceFeed,
           riseSolMint,
           borrowerRiseSolAccount: userRiseSolAccount,
           stakingProgram: stakingProgram.programId,
@@ -670,7 +674,7 @@ describe("rise-cdp", () => {
           collateralConfig,
           globalPool,
           cdpConfig,
-          solPriceFeed: solPriceFeed.publicKey,
+          solPriceFeed: solPriceFeed,
           riseSolMint,
           borrowerRiseSolAccount: userRiseSolAccount,
           stakingProgram: stakingProgram.programId,
@@ -704,7 +708,7 @@ describe("rise-cdp", () => {
             authority: authority.publicKey,
             paymentConfig: solPaymentConfig,
             mint: anchor.web3.SystemProgram.programId,
-            pythPriceFeed: solPriceFeed.publicKey,
+            pythPriceFeed: solPriceFeed,
             systemProgram: SystemProgram.programId,
           })
           .rpc();
@@ -730,8 +734,8 @@ describe("rise-cdp", () => {
           poolVault,
           collateralVault,
           borrowerCollateralAccount: userUsdcAccount,
-          pythPriceFeed: solPriceFeed.publicKey,
-          solPriceFeed: solPriceFeed.publicKey,
+          pythPriceFeed: solPriceFeed,
+          solPriceFeed: solPriceFeed,
           paymentMint: null,
           borrowerPaymentAccount: null,
           paymentVault: null,
@@ -801,8 +805,8 @@ describe("rise-cdp", () => {
           poolVault,
           collateralVault,
           borrowerCollateralAccount: userUsdcAccount,
-          pythPriceFeed: solPriceFeed.publicKey,
-          solPriceFeed: solPriceFeed.publicKey,
+          pythPriceFeed: solPriceFeed,
+          solPriceFeed: solPriceFeed,
           paymentMint: null,
           borrowerPaymentAccount: null,
           paymentVault: null,
@@ -879,8 +883,8 @@ describe("rise-cdp", () => {
             borrowRewardsConfig,
             borrowRewards: borrowRewards1,
             collateralVault,
-            pythPriceFeed: usdcPriceFeed.publicKey,
-            solPriceFeed: solPriceFeed.publicKey,
+            pythPriceFeed: usdcPriceFeed,
+            solPriceFeed: solPriceFeed,
             riseSolMint,
             borrowerRiseSolAccount: userRiseSolAccount,
             stakingProgram: stakingProgram.programId,
@@ -1081,8 +1085,8 @@ describe("rise-cdp", () => {
             collateralMint: usdcMint,
             borrowerCollateralAccount: userUsdcAccount,
             collateralVault,
-            pythPriceFeed: usdcPriceFeed.publicKey,
-            solPriceFeed: solPriceFeed.publicKey,
+            pythPriceFeed: usdcPriceFeed,
+            solPriceFeed: solPriceFeed,
             riseSolMint,
             borrowerRiseSolAccount: userRiseSolAccount,
             stakingProgram: stakingProgram.programId,
@@ -1157,7 +1161,7 @@ describe("rise-cdp", () => {
           collateralConfig,
           globalPool,
           cdpConfig,
-          solPriceFeed: solPriceFeed.publicKey,
+          solPriceFeed: solPriceFeed,
           riseSolMint,
           borrowerRiseSolAccount: userRiseSolAccount,
           stakingProgram: stakingProgram.programId,
@@ -1285,8 +1289,8 @@ describe("rise-cdp", () => {
           poolVault,
           collateralVault,
           borrowerCollateralAccount: userUsdcAccount,
-          pythPriceFeed: solPriceFeed.publicKey,
-          solPriceFeed: solPriceFeed.publicKey,
+          pythPriceFeed: solPriceFeed,
+          solPriceFeed: solPriceFeed,
           paymentMint: null,
           borrowerPaymentAccount: null,
           paymentVault: null,
