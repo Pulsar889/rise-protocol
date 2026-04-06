@@ -35,6 +35,35 @@ pub fn handler(
         CdpError::LiquidityRedemptionNotNeeded
     );
 
+    // ── Cap amount to what is actually needed to cover the shortfall ──────────
+    // Prevents callers from seizing more collateral than necessary, which would
+    // haircut all borrowers' entitlements beyond what the situation requires.
+    let collateral_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.pyth_price_feed)?;
+    let sol_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_feed)?;
+
+    let shortfall_lamports = pool.pending_withdrawals_lamports
+        .saturating_sub(pool.liquid_buffer_lamports);
+
+    let token_decimals = ctx.accounts.collateral_mint.decimals;
+    let decimal_scale = 10u128.pow(token_decimals as u32);
+
+    // shortfall in micro-USD, then convert to collateral token units
+    let shortfall_usd = (shortfall_lamports as u128)
+        .checked_mul(sol_usd_price)
+        .ok_or(CdpError::MathOverflow)?
+        .checked_div(1_000_000_000)
+        .ok_or(CdpError::MathOverflow)?;
+
+    let max_tokens_needed = shortfall_usd
+        .checked_mul(decimal_scale)
+        .ok_or(CdpError::MathOverflow)?
+        .checked_div(collateral_usd_price)
+        .ok_or(CdpError::MathOverflow)? as u64;
+
+    let amount = amount.min(max_tokens_needed);
+
+    require!(amount > 0, CdpError::ZeroAmount);
+
     require!(
         ctx.accounts.collateral_vault.amount >= amount,
         CdpError::InsufficientExcess
@@ -195,6 +224,12 @@ pub struct RedeemCollateralForLiquidity<'info> {
         bump
     )]
     pub pool_vault: UncheckedAccount<'info>,
+
+    /// CHECK: Pyth price feed for the collateral token.
+    pub pyth_price_feed: AccountInfo<'info>,
+
+    /// CHECK: Pyth price feed for SOL/USD.
+    pub sol_price_feed: AccountInfo<'info>,
 
     pub staking_program: Program<'info, rise_staking::program::RiseStaking>,
     pub token_program: Program<'info, Token>,

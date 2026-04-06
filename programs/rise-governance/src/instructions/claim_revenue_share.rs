@@ -3,7 +3,7 @@ use anchor_lang::system_program;
 use crate::state::{GovernanceConfig, VeLock};
 use crate::errors::GovernanceError;
 
-pub fn handler(ctx: Context<ClaimRevenueShare>, treasury_vault_bump: u8) -> Result<()> {
+pub fn handler(ctx: Context<ClaimRevenueShare>) -> Result<()> {
     let current_slot = Clock::get()?.slot;
     let lock = &mut ctx.accounts.lock;
     let config = &ctx.accounts.config;
@@ -44,7 +44,8 @@ pub fn handler(ctx: Context<ClaimRevenueShare>, treasury_vault_bump: u8) -> Resu
     require!(claimable > 0, GovernanceError::NoRewardsToClaim);
 
     // Transfer SOL from treasury vault to user
-    let seeds = &[b"treasury_vault".as_ref(), &[treasury_vault_bump]];
+    let vault_bump = ctx.bumps.treasury_vault;
+    let seeds = &[b"treasury_vault".as_ref(), &[vault_bump]];
     let signer = &[&seeds[..]];
 
     let cpi_ctx = CpiContext::new_with_signer(
@@ -91,8 +92,13 @@ pub struct ClaimRevenueShare<'info> {
     /// CHECK: Staking program treasury — read only for revenue index.
     pub treasury: AccountInfo<'info>,
 
-    /// CHECK: Treasury SOL vault — PDA from staking program.
-    #[account(mut)]
+    /// CHECK: Treasury SOL vault — PDA from staking program, bump derived by Anchor.
+    #[account(
+        mut,
+        seeds = [b"treasury_vault"],
+        bump,
+        seeds::program = rise_staking::ID
+    )]
     pub treasury_vault: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,

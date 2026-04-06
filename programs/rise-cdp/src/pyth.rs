@@ -21,6 +21,17 @@ pub fn get_pyth_price(price_feed: &AccountInfo) -> Result<u128> {
 
     require!(price.price > 0, CdpError::InvalidOraclePrice);
 
+    // Reject if confidence interval exceeds 2% of price
+    require!(
+        (price.conf as u128)
+            .checked_mul(10_000)
+            .ok_or(error!(CdpError::MathOverflow))?
+            <= (price.price as u128)
+                .checked_mul(200)
+                .ok_or(error!(CdpError::MathOverflow))?,
+        CdpError::InsufficientPriceConfidence
+    );
+
     let raw = price.price as u128;
     let expo = price.expo; // e.g. -8 for most USD pairs
 

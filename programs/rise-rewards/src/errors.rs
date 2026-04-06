@@ -25,4 +25,7 @@ pub enum RewardsError {
 
     #[msg("Weight basis points cannot exceed 10000")]
     InvalidWeight,
+
+    #[msg("Gauge still has active LP deposits — all users must withdraw before closing")]
+    GaugeHasActiveDeposits,
 }

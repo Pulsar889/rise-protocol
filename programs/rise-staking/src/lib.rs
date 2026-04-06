@@ -57,11 +57,6 @@ pub mod rise_staking {
         instructions::collect_fees::handler(ctx)
     }
 
-    /// User claims accumulated veRISE revenue share.
-    pub fn claim_revenue(ctx: Context<ClaimRevenue>) -> Result<()> {
-        instructions::claim_revenue::handler(ctx)
-    }
-
     /// Authority updates treasury configuration.
     pub fn update_treasury_config(
         ctx: Context<UpdateTreasuryConfig>,
@@ -170,5 +165,16 @@ pub mod rise_staking {
     /// User: claim accumulated RISE staking rewards.
     pub fn claim_stake_rewards(ctx: Context<ClaimStakeRewards>) -> Result<()> {
         instructions::claim_stake_rewards::handler(ctx)
+    }
+
+    /// Authority: close the stake rewards config and vault, burning any remaining RISE.
+    /// Use this before re-initializing with a new RISE mint.
+    pub fn close_stake_rewards(ctx: Context<CloseStakeRewards>) -> Result<()> {
+        instructions::close_stake_rewards::handler(ctx)
+    }
+
+    /// Authority: withdraw accumulated reserve SOL from treasury_vault to any destination.
+    pub fn withdraw_reserve(ctx: Context<WithdrawReserve>, amount: u64) -> Result<()> {
+        instructions::withdraw_reserve::handler(ctx, amount)
     }
 }

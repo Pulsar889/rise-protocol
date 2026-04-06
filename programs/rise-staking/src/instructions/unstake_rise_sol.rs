@@ -131,15 +131,14 @@ pub struct UnstakeRiseSol<'info> {
     #[account(
         mut,
         seeds = [b"stake_rewards_config"],
-        bump = stake_rewards_config.bump
+        bump
     )]
     pub stake_rewards_config: Option<Account<'info, StakeRewardsConfig>>,
 
     #[account(
         mut,
         seeds = [b"user_stake_rewards", user.key().as_ref()],
-        bump = user_stake_rewards.bump,
-        constraint = user_stake_rewards.owner == user.key()
+        bump
     )]
     pub user_stake_rewards: Option<Account<'info, UserStakeRewards>>,
 }

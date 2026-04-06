@@ -61,25 +61,9 @@ pub fn handler(
         CdpError::PositionHealthy
     );
 
-    // ── Trigger fee → caller (liquidation_penalty_bps % of collateral) ───────
-    let trigger_fee_usd = collateral_usd
-        .checked_mul(config.liquidation_penalty_bps as u128)
-        .ok_or(CdpError::MathOverflow)?
-        .checked_div(10_000)
-        .ok_or(CdpError::MathOverflow)?;
-
-    let trigger_fee_tokens = trigger_fee_usd
-        .checked_mul(decimal_scale)
-        .ok_or(CdpError::MathOverflow)?
-        .checked_div(collateral_usd_price)
-        .ok_or(CdpError::MathOverflow)? as u64;
-
-    // ── Excess collateral → borrower (above debt + trigger fee) ─────────────
-    let total_deducted_usd = debt_usd
-        .checked_add(trigger_fee_usd)
-        .ok_or(CdpError::MathOverflow)?;
-
-    let excess_usd = collateral_usd.saturating_sub(total_deducted_usd);
+    // ── Excess collateral → borrower (above debt value) ─────────────────────
+    // Trigger fee is paid post-swap in SOL; excess is still returned as tokens.
+    let excess_usd = collateral_usd.saturating_sub(debt_usd);
 
     let excess_tokens = excess_usd
         .checked_mul(decimal_scale)
@@ -109,22 +93,6 @@ pub fn handler(
     let vault_seeds = &[b"collateral_vault".as_ref(), config_mint_ref, &[vault_bump]];
     let vault_signer = &[&vault_seeds[..]];
 
-    // ── Trigger fee → caller ─────────────────────────────────────────────────
-    if trigger_fee_tokens > 0 {
-        token::transfer(
-            CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from:      ctx.accounts.collateral_vault.to_account_info(),
-                    to:        ctx.accounts.caller_collateral_account.to_account_info(),
-                    authority: ctx.accounts.collateral_vault.to_account_info(),
-                },
-                vault_signer,
-            ),
-            trigger_fee_tokens,
-        )?;
-    }
-
     // ── Excess → borrower ────────────────────────────────────────────────────
     if excess_tokens > 0 {
         token::transfer(
@@ -141,9 +109,9 @@ pub fn handler(
         )?;
     }
 
-    // ── Remaining debt-worth collateral → Jupiter → WSOL → SOL ──────────────
+    // ── Collateral to swap: everything except what was returned to borrower ───
+    // Trigger fee (liquidation_penalty_bps %) will be paid post-swap in SOL.
     let debt_worth_tokens = position.collateral_amount_original
-        .saturating_sub(trigger_fee_tokens)
         .saturating_sub(excess_tokens);
 
     if debt_worth_tokens > 0 {
@@ -172,10 +140,19 @@ pub fn handler(
         ctx.accounts.cdp_wsol_vault.reload()?;
         let actual_sol = ctx.accounts.cdp_wsol_vault.amount;
 
-        // Proportionally split between interest and principal
+        // Trigger fee = liquidation_penalty_bps % of actual SOL recovered
+        let trigger_fee_sol = (actual_sol as u128)
+            .checked_mul(config.liquidation_penalty_bps as u128)
+            .ok_or(CdpError::MathOverflow)?
+            .checked_div(10_000)
+            .ok_or(CdpError::MathOverflow)? as u64;
+
+        let sol_after_fee = actual_sol.saturating_sub(trigger_fee_sol);
+
+        // Proportionally split remaining SOL between interest and principal
         let total_target = principal_sol_target.saturating_add(interest_sol_target);
-        let actual_interest_sol = if total_target > 0 && actual_sol > 0 {
-            (actual_sol as u128)
+        let actual_interest_sol = if total_target > 0 && sol_after_fee > 0 {
+            (sol_after_fee as u128)
                 .checked_mul(interest_sol_target as u128)
                 .unwrap_or(0)
                 .checked_div(total_target as u128)
@@ -183,7 +160,7 @@ pub fn handler(
         } else {
             0
         };
-        let actual_principal_sol = actual_sol.saturating_sub(actual_interest_sol);
+        let actual_principal_sol = sol_after_fee.saturating_sub(actual_interest_sol);
 
         // Unwrap WSOL → native SOL: close cdp_wsol_vault → cdp_fee_vault
         let cdp_config_bump = ctx.accounts.cdp_config.bump;
@@ -202,12 +179,27 @@ pub fn handler(
             ),
         )?;
 
+        let fee_vault_bump = ctx.bumps.cdp_fee_vault;
+        let fee_seeds = &[b"cdp_fee_vault".as_ref(), &[fee_vault_bump]];
+        let fee_signer = &[&fee_seeds[..]];
+
+        // Trigger fee → caller (in SOL)
+        if trigger_fee_sol > 0 {
+            system_program::transfer(
+                CpiContext::new_with_signer(
+                    ctx.accounts.system_program.to_account_info(),
+                    system_program::Transfer {
+                        from: ctx.accounts.cdp_fee_vault.to_account_info(),
+                        to:   ctx.accounts.caller.to_account_info(),
+                    },
+                    fee_signer,
+                ),
+                trigger_fee_sol,
+            )?;
+        }
+
         // Route principal SOL from cdp_fee_vault → pool_vault
         if actual_principal_sol > 0 {
-            let fee_vault_bump = ctx.bumps.cdp_fee_vault;
-            let fee_seeds = &[b"cdp_fee_vault".as_ref(), &[fee_vault_bump]];
-            let fee_signer = &[&fee_seeds[..]];
-
             system_program::transfer(
                 CpiContext::new_with_signer(
                     ctx.accounts.system_program.to_account_info(),
@@ -223,6 +215,7 @@ pub fn handler(
         // actual_interest_sol (+ rent) remains in cdp_fee_vault
 
         msg!("Jupiter swap: {} tokens → {} lamports SOL", debt_worth_tokens, actual_sol);
+        msg!("  trigger fee SOL → caller:      {}", trigger_fee_sol);
         msg!("  principal SOL → pool_vault:    {}", actual_principal_sol);
         msg!("  interest  SOL → cdp_fee_vault: {}", actual_interest_sol);
     }
@@ -257,7 +250,6 @@ pub fn handler(
     position.interest_accrued = 0;
 
     msg!("Position liquidated — health factor was: {}", health_factor);
-    msg!("Trigger fee to caller:       {} tokens", trigger_fee_tokens);
     msg!("Excess returned to borrower: {} tokens", excess_tokens);
 
     Ok(())
@@ -294,18 +286,11 @@ pub struct Liquidate<'info> {
     )]
     pub collateral_vault: Box<Account<'info, TokenAccount>>,
 
-    /// Caller's collateral token account — receives the trigger fee.
-    #[account(
-        mut,
-        constraint = caller_collateral_account.mint == collateral_config.mint,
-        constraint = caller_collateral_account.owner == caller.key()
-    )]
-    pub caller_collateral_account: Box<Account<'info, TokenAccount>>,
-
     /// Borrower's collateral account — receives excess collateral if any.
     #[account(
         mut,
-        constraint = borrower_collateral_account.mint == collateral_config.mint
+        constraint = borrower_collateral_account.mint == collateral_config.mint,
+        constraint = borrower_collateral_account.owner == position.owner @ CdpError::Unauthorized
     )]
     pub borrower_collateral_account: Box<Account<'info, TokenAccount>>,
 

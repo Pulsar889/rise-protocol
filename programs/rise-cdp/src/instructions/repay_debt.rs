@@ -357,10 +357,7 @@ pub fn handler(
                 shortfall_sol_divert
             );
         } else if shortfall_tokens > 0 {
-            msg!(
-                "WARN: Collateral shortfall of {} tokens — no route plan provided, skipping buyback",
-                shortfall_tokens
-            );
+            return Err(error!(CdpError::CollateralShortfall));
         }
 
         position.is_open = false;

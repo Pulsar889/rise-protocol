@@ -61,4 +61,13 @@ pub enum CdpError {
 
     #[msg("Borrow rewards not yet initialized")]
     BorrowRewardsNotInitialized,
+
+    #[msg("Oracle price confidence interval is too wide")]
+    InsufficientPriceConfidence,
+
+    #[msg("Collateral shortfall exists — provide a buyback route to complete repayment")]
+    CollateralShortfall,
+
+    #[msg("Caller is not authorized for this operation")]
+    Unauthorized,
 }

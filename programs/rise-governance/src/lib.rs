@@ -65,9 +65,8 @@ pub mod rise_governance {
 
     pub fn claim_revenue_share(
         ctx: Context<ClaimRevenueShare>,
-        treasury_vault_bump: u8,
     ) -> Result<()> {
-        instructions::claim_revenue_share::handler(ctx, treasury_vault_bump)
+        instructions::claim_revenue_share::handler(ctx)
     }
 
     pub fn update_governance_config(

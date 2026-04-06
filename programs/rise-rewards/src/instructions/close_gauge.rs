@@ -12,6 +12,10 @@ pub fn handler(ctx: Context<CloseGauge>) -> Result<()> {
     // Verify discriminator matches Gauge
     let data = gauge_info.try_borrow_data()?;
     require!(data[..8] == *Gauge::DISCRIMINATOR, RewardsError::Unauthorized);
+
+    // Refuse to close if users still have LP tokens deposited — they would be unable to withdraw.
+    let gauge: Gauge = AnchorDeserialize::deserialize(&mut &data[8..])?;
+    require!(gauge.total_lp_deposited == 0, RewardsError::GaugeHasActiveDeposits);
     drop(data);
 
     // Transfer all lamports to authority

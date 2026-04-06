@@ -9,6 +9,8 @@ pub mod close_rewards_config;
 pub mod close_gauge;
 pub mod initialize_rewards_vault;
 pub mod set_gauge_weight;
+pub mod initialize_gauge_lp_vault;
+pub mod force_withdraw_lp;
 
 pub use initialize_rewards::*;
 pub use create_gauge::*;
@@ -21,3 +23,5 @@ pub use close_rewards_config::*;
 pub use close_gauge::*;
 pub use initialize_rewards_vault::*;
 pub use set_gauge_weight::*;
+pub use initialize_gauge_lp_vault::*;
+pub use force_withdraw_lp::*;

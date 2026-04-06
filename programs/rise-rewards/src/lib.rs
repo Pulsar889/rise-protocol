@@ -85,4 +85,15 @@ pub mod rise_rewards {
     pub fn set_gauge_weight(ctx: Context<SetGaugeWeight>, weight_bps: u16) -> Result<()> {
         instructions::set_gauge_weight::handler(ctx, weight_bps)
     }
+
+    /// Creates the LP token vault for a gauge. Must be called once after `create_gauge`.
+    pub fn initialize_gauge_lp_vault(ctx: Context<InitializeGaugeLpVault>) -> Result<()> {
+        instructions::initialize_gauge_lp_vault::handler(ctx)
+    }
+
+    /// Authority-only: force-refund a depositor's LP tokens and pending RISE rewards.
+    /// Use this to clear out a gauge before closing it.
+    pub fn force_withdraw_lp(ctx: Context<ForceWithdrawLp>) -> Result<()> {
+        instructions::force_withdraw_lp::handler(ctx)
+    }
 }
