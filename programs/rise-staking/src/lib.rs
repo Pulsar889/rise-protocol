@@ -27,8 +27,8 @@ pub mod rise_staking {
     }
 
     /// User burns riseSOL and receives a WithdrawalTicket claimable after ~2 epochs.
-    pub fn unstake_rise_sol(ctx: Context<UnstakeRiseSol>, rise_sol_amount: u64, nonce: u8) -> Result<()> {
-        instructions::unstake_rise_sol::handler(ctx, rise_sol_amount, nonce)
+    pub fn unstake_rise_sol(ctx: Context<UnstakeRiseSol>, rise_sol_amount: u64) -> Result<()> {
+        instructions::unstake_rise_sol::handler(ctx, rise_sol_amount)
     }
 
     /// User redeems a matured WithdrawalTicket and receives their SOL.

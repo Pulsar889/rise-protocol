@@ -18,8 +18,8 @@ pub fn handler(
     config.min_lock_slots = GovernanceConfig::SLOTS_PER_WEEK;
     config.max_lock_slots = GovernanceConfig::MAX_LOCK_SLOTS;
     config.proposal_threshold = proposal_threshold;
-    config.voting_period_slots = GovernanceConfig::SLOTS_PER_WEEK; // 1 week voting
-    config.timelock_slots = GovernanceConfig::SLOTS_PER_WEEK / 3;  // ~48 hours
+    config.voting_period_slots = 302_400; // ~3 days at 400ms/slot (within 151_200–453_600 bounds)
+    config.timelock_slots = 201_600;     // ~2 days at 400ms/slot (within 0–453_600 bounds)
     config.quorum_bps = quorum_bps;
     config.proposal_count = 0;
     config.lock_count = 0;

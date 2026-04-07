@@ -69,9 +69,12 @@ impl VeLock {
         if total_slots == 0 {
             return 0;
         }
-        ((self.verise_amount as u128)
+        let weight = ((self.verise_amount as u128)
             .saturating_mul(remaining_slots as u128)
-            / (total_slots as u128)) as u64
+            / (total_slots as u128)) as u64;
+        // Guarantee at least 1 unit of voting weight while any time remains,
+        // preventing integer division from rounding a nearly-expired lock to 0.
+        weight.max(1)
     }
 }
 
@@ -104,6 +107,7 @@ impl Proposal {
 #[account]
 pub struct VoteRecord {
     pub voter: Pubkey,
+    pub lock: Pubkey,
     pub proposal: Pubkey,
     pub verise_at_vote: u64,
     pub vote_for: bool,
@@ -111,7 +115,7 @@ pub struct VoteRecord {
 }
 
 impl VoteRecord {
-    pub const SIZE: usize = 8 + 32 + 32 + 8 + 1 + 1;
+    pub const SIZE: usize = 8 + 32 + 32 + 32 + 8 + 1 + 1;
 }
 
 #[account]

@@ -16,7 +16,10 @@ pub struct StakeRewardsConfig {
     pub epoch_emissions: u64,
     /// Epoch length in slots (~1 week).
     pub slots_per_epoch: u64,
-    /// Current total riseSOL in staker hands — updated on every stake/unstake.
+    /// Total riseSOL held by *staking-origin* depositors — updated on every stake/unstake.
+    /// IMPORTANT: This tracks only riseSOL minted via stake_sol. It does NOT include
+    /// CDP-minted riseSOL (tracked separately in CdpConfig.cdp_rise_sol_minted) and
+    /// must never be used as a proxy for total riseSOL supply.
     pub total_staking_supply: u64,
     /// Slot when the accumulator was last advanced.
     pub last_checkpoint_slot: u64,
@@ -122,12 +125,17 @@ pub struct GlobalPool {
 
     /// Slot at which `prev_exchange_rate` was captured.
     pub prev_rate_update_slot: u64,
+
+    /// Auto-incrementing counter used to seed withdrawal ticket PDAs.
+    /// Removes the need for the caller to supply a nonce.
+    pub unstake_nonce: u64,
 }
 
 impl GlobalPool {
     pub const SIZE: usize = 8 + 32 + 32 + 16 + 16 + 16 + 8 + 16 + 2 + 2 + 1 + 16 + 1 + 32
         + 16  // prev_exchange_rate
-        + 8;  // prev_rate_update_slot
+        + 8   // prev_rate_update_slot
+        + 8;  // unstake_nonce
     pub const RATE_SCALE: u128 = 1_000_000_000;
     /// Epochs to wait before a withdrawal ticket can be claimed (~2 Solana epochs).
     pub const UNSTAKE_EPOCH_DELAY: u64 = 2;
@@ -161,8 +169,8 @@ pub struct WithdrawalTicket {
     pub sol_amount: u64,
     /// Earliest epoch the owner can call `claim_unstake`.
     pub claimable_epoch: u64,
-    /// Nonce — allows multiple outstanding tickets per wallet.
-    pub nonce: u8,
+    /// Global nonce from GlobalPool.unstake_nonce — used to derive this ticket's PDA.
+    pub nonce: u64,
     /// Bump seed for PDA.
     pub bump: u8,
 }
@@ -172,7 +180,7 @@ impl WithdrawalTicket {
         + 32 // owner
         + 8  // sol_amount
         + 8  // claimable_epoch
-        + 1  // nonce
+        + 8  // nonce (u64)
         + 1; // bump
 }
 

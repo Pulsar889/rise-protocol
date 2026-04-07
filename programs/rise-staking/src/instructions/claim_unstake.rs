@@ -6,6 +6,8 @@ use crate::errors::StakingError;
 /// Redeems a WithdrawalTicket after the epoch delay has passed.
 /// Transfers the locked SOL from pool_vault to the owner and closes the ticket.
 pub fn handler(ctx: Context<ClaimUnstake>) -> Result<()> {
+    require!(!ctx.accounts.pool.paused, StakingError::PoolPaused);
+
     let ticket = &ctx.accounts.ticket;
     let current_epoch = Clock::get()?.epoch;
 
@@ -59,7 +61,7 @@ pub struct ClaimUnstake<'info> {
 
     #[account(
         mut,
-        seeds = [b"withdrawal_ticket", user.key().as_ref(), &[ticket.nonce]],
+        seeds = [b"withdrawal_ticket", user.key().as_ref(), &ticket.nonce.to_le_bytes()],
         bump = ticket.bump,
         constraint = ticket.owner == user.key(),
         close = user

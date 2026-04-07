@@ -1,17 +1,13 @@
 use anchor_lang::prelude::*;
-use crate::state::ProtocolTreasury;
+use crate::state::{GlobalPool, ProtocolTreasury};
 use crate::errors::StakingError;
 
-/// Called by the CDP program (or any trusted external program) to register
-/// revenue that has already been deposited into treasury_vault.
-/// Updates the revenue_index so veRISE holders can claim their share.
+/// Called by the CDP program to register revenue that has already been
+/// deposited into treasury_vault. Updates the revenue_index so veRISE
+/// holders can claim their share.
 ///
-/// Authorization model: the caller must be a signer. In this initial version
-/// any signer can call this. In production the caller should be constrained
-/// to a known CDP program PDA (e.g. cdp_fee_vault) via an address constraint.
-/// Financial integrity is preserved because the actual SOL was already
-/// transferred to treasury_vault before this is called — only the accounting
-/// index is updated here.
+/// Authorization: signer must be the CDP config PDA registered on GlobalPool
+/// via set_cdp_config. Only rise-cdp can produce that PDA signature.
 pub fn handler(
     ctx: Context<RegisterExternalRevenue>,
     verise_lamports: u64,
@@ -54,9 +50,16 @@ pub fn handler(
 
 #[derive(Accounts)]
 pub struct RegisterExternalRevenue<'info> {
-    /// Authorized caller — in practice this will be the CDP program's
-    /// cdp_fee_vault PDA signing via CPI invoke_signed.
-    pub caller: Signer<'info>,
+    /// CDP config PDA — must match global_pool.cdp_config_pubkey.
+    /// The CDP program signs this CPI with its cdp_config PDA seeds [b"cdp_config"].
+    pub cdp_config: Signer<'info>,
+
+    #[account(
+        seeds = [b"global_pool"],
+        bump = global_pool.bump,
+        constraint = cdp_config.key() == global_pool.cdp_config_pubkey @ StakingError::Unauthorized
+    )]
+    pub global_pool: Account<'info, GlobalPool>,
 
     #[account(
         mut,

@@ -17,53 +17,61 @@ pub fn handler(
     let config = &mut ctx.accounts.collateral_config;
 
     if let Some(ltv) = max_ltv_bps {
-        require!(ltv <= 10_000, CdpError::ZeroAmount);
+        require!(ltv <= 9_500, CdpError::ZeroAmount);
+        msg!("max_ltv_bps: {} → {}", config.max_ltv_bps, ltv);
         config.max_ltv_bps = ltv;
-        msg!("Updated max LTV to {} bps", ltv);
     }
 
     if let Some(threshold) = liquidation_threshold_bps {
-        require!(threshold <= 10_000, CdpError::ZeroAmount);
+        require!(threshold <= 9_800, CdpError::ZeroAmount);
+        msg!("liquidation_threshold_bps: {} → {}", config.liquidation_threshold_bps, threshold);
         config.liquidation_threshold_bps = threshold;
-        msg!("Updated liquidation threshold to {} bps", threshold);
     }
 
     if let Some(penalty) = liquidation_penalty_bps {
-        require!(penalty <= 10_000, CdpError::ZeroAmount);
+        require!(penalty <= 2_000, CdpError::ZeroAmount);
+        msg!("liquidation_penalty_bps: {} → {}", config.liquidation_penalty_bps, penalty);
         config.liquidation_penalty_bps = penalty;
-        msg!("Updated liquidation penalty to {} bps", penalty);
     }
 
+    require!(
+        config.liquidation_threshold_bps > config.max_ltv_bps,
+        CdpError::ZeroAmount
+    );
+
     if let Some(rate) = base_rate_bps {
+        require!(rate <= 10_000, CdpError::ZeroAmount);
+        msg!("base_rate_bps: {} → {}", config.base_rate_bps, rate);
         config.base_rate_bps = rate;
-        msg!("Updated base rate to {} bps", rate);
     }
 
     if let Some(slope1) = rate_slope1_bps {
+        require!(slope1 <= 20_000, CdpError::ZeroAmount);
+        msg!("rate_slope1_bps: {} → {}", config.rate_slope1_bps, slope1);
         config.rate_slope1_bps = slope1;
-        msg!("Updated rate slope1 to {} bps", slope1);
     }
 
     if let Some(slope2) = rate_slope2_bps {
+        require!(slope2 <= 50_000, CdpError::ZeroAmount);
+        msg!("rate_slope2_bps: {} → {}", config.rate_slope2_bps, slope2);
         config.rate_slope2_bps = slope2;
-        msg!("Updated rate slope2 to {} bps", slope2);
     }
 
     if let Some(optimal) = optimal_utilization_bps {
         require!(optimal <= 10_000, CdpError::ZeroAmount);
+        msg!("optimal_utilization_bps: {} → {}", config.optimal_utilization_bps, optimal);
         config.optimal_utilization_bps = optimal;
-        msg!("Updated optimal utilization to {} bps", optimal);
     }
 
     if let Some(slippage) = conversion_slippage_bps {
         require!(slippage <= 10_000, CdpError::ZeroAmount);
+        msg!("conversion_slippage_bps: {} → {}", config.conversion_slippage_bps, slippage);
         config.conversion_slippage_bps = slippage;
-        msg!("Updated conversion slippage to {} bps", slippage);
     }
 
     if let Some(is_active) = active {
+        msg!("active: {} → {}", config.active, is_active);
         config.active = is_active;
-        msg!("Updated active status to {}", is_active);
     }
 
     msg!("Collateral config updated for mint: {}", config.mint);

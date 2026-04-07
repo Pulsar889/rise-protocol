@@ -46,4 +46,10 @@ pub enum GovernanceError {
 
     #[msg("Already voted on this proposal")]
     AlreadyVoted,
+
+    #[msg("Invalid governance config parameter")]
+    InvalidConfig,
+
+    #[msg("Vault did not receive the expected token amount")]
+    TransferAmountMismatch,
 }

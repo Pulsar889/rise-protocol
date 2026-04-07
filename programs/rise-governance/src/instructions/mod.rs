@@ -9,6 +9,7 @@ pub mod cast_vote;
 pub mod execute_proposal;
 pub mod claim_revenue_share;
 pub mod update_governance_config;
+pub mod close_proposal;
 
 pub use initialize_governance::*;
 pub use initialize_rise_vault::*;
@@ -21,3 +22,4 @@ pub use cast_vote::*;
 pub use execute_proposal::*;
 pub use claim_revenue_share::*;
 pub use update_governance_config::*;
+pub use close_proposal::*;

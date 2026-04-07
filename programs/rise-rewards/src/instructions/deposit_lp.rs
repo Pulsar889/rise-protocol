@@ -4,7 +4,7 @@ use crate::state::{Gauge, UserStake};
 use crate::errors::RewardsError;
 
 pub fn handler(ctx: Context<DepositLp>, amount: u64) -> Result<()> {
-    require!(amount > 0, RewardsError::ZeroAmount);
+    require!(amount >= 1_000, RewardsError::ZeroAmount);
     require!(ctx.accounts.gauge.active, RewardsError::GaugeNotActive);
 
     let gauge = &mut ctx.accounts.gauge;

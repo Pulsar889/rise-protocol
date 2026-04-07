@@ -5,7 +5,7 @@ use crate::errors::StakingError;
 
 /// Burns riseSOL and creates a WithdrawalTicket redeemable after UNSTAKE_EPOCH_DELAY epochs.
 /// The SOL amount is locked in at the current exchange rate.
-pub fn handler(ctx: Context<UnstakeRiseSol>, rise_sol_amount: u64, nonce: u8) -> Result<()> {
+pub fn handler(ctx: Context<UnstakeRiseSol>, rise_sol_amount: u64) -> Result<()> {
     require!(!ctx.accounts.pool.paused, StakingError::PoolPaused);
     require!(rise_sol_amount > 0, StakingError::ZeroAmount);
 
@@ -69,13 +69,18 @@ pub fn handler(ctx: Context<UnstakeRiseSol>, rise_sol_amount: u64, nonce: u8) ->
         .checked_add(sol_amount as u128)
         .ok_or(StakingError::MathOverflow)?;
 
-    // Write ticket
+    // Write ticket — nonce captured before incrementing so PDA seeds match
+    let ticket_nonce = pool.unstake_nonce;
+    pool.unstake_nonce = pool.unstake_nonce
+        .checked_add(1)
+        .ok_or(StakingError::MathOverflow)?;
+
     let current_epoch = Clock::get()?.epoch;
     let ticket = &mut ctx.accounts.ticket;
     ticket.owner = ctx.accounts.user.key();
     ticket.sol_amount = sol_amount;
     ticket.claimable_epoch = current_epoch + GlobalPool::UNSTAKE_EPOCH_DELAY;
-    ticket.nonce = nonce;
+    ticket.nonce = ticket_nonce;
     ticket.bump = ctx.bumps.ticket;
 
     msg!(
@@ -89,7 +94,7 @@ pub fn handler(ctx: Context<UnstakeRiseSol>, rise_sol_amount: u64, nonce: u8) ->
 }
 
 #[derive(Accounts)]
-#[instruction(rise_sol_amount: u64, nonce: u8)]
+#[instruction(rise_sol_amount: u64)]
 pub struct UnstakeRiseSol<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
@@ -105,7 +110,7 @@ pub struct UnstakeRiseSol<'info> {
         init,
         payer = user,
         space = WithdrawalTicket::SIZE,
-        seeds = [b"withdrawal_ticket", user.key().as_ref(), &[nonce]],
+        seeds = [b"withdrawal_ticket", user.key().as_ref(), &pool.unstake_nonce.to_le_bytes()],
         bump
     )]
     pub ticket: Account<'info, WithdrawalTicket>,

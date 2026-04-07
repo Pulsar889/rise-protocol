@@ -80,4 +80,8 @@ pub mod rise_governance {
             ctx, proposal_threshold, quorum_bps, voting_period_slots, timelock_slots,
         )
     }
+
+    pub fn close_proposal(ctx: Context<CloseProposal>) -> Result<()> {
+        instructions::close_proposal::handler(ctx)
+    }
 }

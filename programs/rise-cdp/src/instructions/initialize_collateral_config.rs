@@ -14,10 +14,14 @@ pub fn handler(
     optimal_utilization_bps: u16,
     conversion_slippage_bps: u16,
 ) -> Result<()> {
-    require!(max_ltv_bps <= 10_000, CdpError::ZeroAmount);
-    require!(liquidation_threshold_bps <= 10_000, CdpError::ZeroAmount);
-    require!(liquidation_penalty_bps <= 10_000, CdpError::ZeroAmount);
+    require!(max_ltv_bps <= 9_500, CdpError::ZeroAmount);
+    require!(liquidation_threshold_bps <= 9_800, CdpError::ZeroAmount);
+    require!(liquidation_threshold_bps > max_ltv_bps, CdpError::ZeroAmount);
+    require!(liquidation_penalty_bps <= 2_000, CdpError::ZeroAmount);
     require!(optimal_utilization_bps <= 10_000, CdpError::ZeroAmount);
+    require!(base_rate_bps <= 10_000, CdpError::ZeroAmount);
+    require!(rate_slope1_bps <= 20_000, CdpError::ZeroAmount);
+    require!(rate_slope2_bps <= 50_000, CdpError::ZeroAmount);
 
     let config = &mut ctx.accounts.collateral_config;
 

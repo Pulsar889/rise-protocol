@@ -87,6 +87,12 @@ pub fn handler(
         .checked_div(rate_scale)
         .ok_or(CdpError::MathOverflow)? as u64;
 
+    // ── Mark position closed before any CPI to prevent reentrancy ───────────
+    // Setting this before Jupiter executes means any reentrant call to
+    // liquidate will fail the is_open check. Transaction atomicity ensures
+    // this reverts if anything below fails.
+    position.is_open = false;
+
     // ── Vault signer seeds ───────────────────────────────────────────────────
     let config_mint_ref = config.mint.as_ref();
     let vault_bump = ctx.bumps.collateral_vault;
@@ -244,8 +250,7 @@ pub fn handler(
         .cdp_rise_sol_minted
         .saturating_sub(position.rise_sol_debt_principal as u128);
 
-    // ── Cancel debt and close position ───────────────────────────────────────
-    position.is_open = false;
+    // ── Cancel debt ──────────────────────────────────────────────────────────
     position.rise_sol_debt_principal = 0;
     position.interest_accrued = 0;
 
@@ -272,7 +277,8 @@ pub struct Liquidate<'info> {
     #[account(
         mut,
         seeds = [b"collateral_config", collateral_config.mint.as_ref()],
-        bump = collateral_config.bump
+        bump = collateral_config.bump,
+        constraint = collateral_config.mint == position.collateral_mint @ CdpError::CollateralNotAccepted
     )]
     pub collateral_config: Box<Account<'info, CollateralConfig>>,
 

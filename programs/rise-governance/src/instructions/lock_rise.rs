@@ -33,6 +33,7 @@ pub fn handler(
     require!(verise_amount > 0, GovernanceError::ZeroAmount);
 
     // Transfer RISE from user to lock vault
+    let balance_before = ctx.accounts.rise_vault.amount;
     token::transfer(
         CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
@@ -44,6 +45,13 @@ pub fn handler(
         ),
         amount,
     )?;
+    ctx.accounts.rise_vault.reload()?;
+    require!(
+        ctx.accounts.rise_vault.amount == balance_before
+            .checked_add(amount)
+            .ok_or(GovernanceError::MathOverflow)?,
+        GovernanceError::TransferAmountMismatch
+    );
 
     // Read revenue index from treasury account data
     let revenue_index = {

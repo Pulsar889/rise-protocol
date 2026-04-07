@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer, Burn, Mint};
-use crate::state::{CdpPosition, CollateralConfig};
+use crate::state::{CdpPosition, CollateralConfig, BorrowRewardsConfig};
 use crate::errors::CdpError;
 
 
@@ -40,6 +40,13 @@ pub fn handler(ctx: Context<ClosePosition>) -> Result<()> {
         .collateral_config
         .total_collateral_entitlements
         .saturating_sub(position.collateral_amount_original);
+
+    // --- Decrement global CDP debt tracker ---
+    ctx.accounts.borrow_rewards_config.total_cdp_debt = ctx
+        .accounts
+        .borrow_rewards_config
+        .total_cdp_debt
+        .saturating_sub(position.rise_sol_debt_principal);
 
     // --- Return collateral to borrower ---
     // In production: unstake SOL, convert back to collateral via Jupiter.
@@ -126,4 +133,11 @@ pub struct ClosePosition<'info> {
     pub collateral_vault: Account<'info, TokenAccount>,
 
     pub token_program: Program<'info, Token>,
+
+    #[account(
+        mut,
+        seeds = [b"borrow_rewards_config"],
+        bump = borrow_rewards_config.bump
+    )]
+    pub borrow_rewards_config: Account<'info, BorrowRewardsConfig>,
 }

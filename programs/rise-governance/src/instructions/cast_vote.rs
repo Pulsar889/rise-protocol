@@ -26,6 +26,7 @@ pub fn handler(ctx: Context<CastVote>, vote_for: bool) -> Result<()> {
     // Record vote
     let vote_record = &mut ctx.accounts.vote_record;
     vote_record.voter = ctx.accounts.voter.key();
+    vote_record.lock = ctx.accounts.lock.key();
     vote_record.proposal = proposal.key();
     vote_record.verise_at_vote = verise_weight;
     vote_record.vote_for = vote_for;
@@ -75,7 +76,7 @@ pub struct CastVote<'info> {
         init,
         payer = voter,
         space = VoteRecord::SIZE,
-        seeds = [b"vote_record", voter.key().as_ref(), proposal.key().as_ref()],
+        seeds = [b"vote_record", lock.key().as_ref(), proposal.key().as_ref()],
         bump
     )]
     pub vote_record: Account<'info, VoteRecord>,

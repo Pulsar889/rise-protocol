@@ -45,7 +45,9 @@ pub fn handler(ctx: Context<ForceWithdrawLp>) -> Result<()> {
     )?;
 
     // ── Transfer RISE rewards to depositor ───────────────────────────────────
-    if total_claimable > 0 {
+    // Cap at vault balance so a depleted rewards vault never blocks LP withdrawal.
+    let claimable = total_claimable.min(ctx.accounts.rewards_vault.amount);
+    if claimable > 0 {
         let config_bump   = ctx.accounts.config.bump;
         let config_seeds  = &[b"rewards_config".as_ref(), &[config_bump]];
         let config_signer = &[&config_seeds[..]];
@@ -60,7 +62,7 @@ pub fn handler(ctx: Context<ForceWithdrawLp>) -> Result<()> {
                 },
                 config_signer,
             ),
-            total_claimable,
+            claimable,
         )?;
     }
 

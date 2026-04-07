@@ -245,23 +245,18 @@ describe("rise-staking", () => {
   it("Unstakes riseSOL and creates a WithdrawalTicket", async () => {
     const unstakeAmount = LAMPORTS_PER_SOL;
 
-    const UNSTAKE_NONCE = 0;
+    // Read the current nonce counter from the pool to derive the ticket PDA.
+    const poolAccount = await program.account.globalPool.fetch(globalPool);
+    const unstakeNonce: anchor.BN = poolAccount.unstakeNonce;
+    const nonceBytes = Buffer.alloc(8);
+    nonceBytes.writeBigUInt64LE(BigInt(unstakeNonce.toString()));
     const [withdrawalTicket] = PublicKey.findProgramAddressSync(
-      [Buffer.from("withdrawal_ticket"), authority.publicKey.toBuffer(), Buffer.from([UNSTAKE_NONCE])],
+      [Buffer.from("withdrawal_ticket"), authority.publicKey.toBuffer(), nonceBytes],
       program.programId
     );
 
-    // Skip creation if the ticket already exists (persistent validator re-run).
-    const ticketInfo = await provider.connection.getAccountInfo(withdrawalTicket);
-    if (ticketInfo !== null) {
-      const ticket = await program.account.withdrawalTicket.fetch(withdrawalTicket);
-      assert.equal(ticket.owner.toBase58(), authority.publicKey.toBase58());
-      console.log(`WithdrawalTicket already exists — skipping. ${ticket.solAmount.toNumber() / LAMPORTS_PER_SOL} SOL claimable at epoch ${ticket.claimableEpoch}`);
-      return;
-    }
-
     await program.methods
-      .unstakeRiseSol(new anchor.BN(unstakeAmount), UNSTAKE_NONCE)
+      .unstakeRiseSol(new anchor.BN(unstakeAmount))
       .accounts({
         user: authority.publicKey,
         pool: globalPool,

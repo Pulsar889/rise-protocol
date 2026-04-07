@@ -1,6 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_lang::system_program;
 use crate::errors::CdpError;
+use crate::state::CdpConfig;
 use rise_staking::state::{GlobalPool, ProtocolTreasury};
 use rise_staking::program::RiseStaking;
 
@@ -106,14 +107,20 @@ pub fn handler(ctx: Context<CollectCdpFees>) -> Result<()> {
     }
 
     // ── CPI to staking: update revenue_index and reserve_lamports ────────────
+    // Sign with cdp_config PDA — rise-staking verifies it matches global_pool.cdp_config_pubkey.
+    let cdp_config_bump = ctx.accounts.cdp_config.bump;
+    let cdp_config_seeds = &[b"cdp_config".as_ref(), &[cdp_config_bump]];
+    let cdp_config_signer = &[&cdp_config_seeds[..]];
+
     rise_staking::cpi::register_external_revenue(
         CpiContext::new_with_signer(
             ctx.accounts.staking_program.to_account_info(),
             rise_staking::cpi::accounts::RegisterExternalRevenue {
-                caller: ctx.accounts.cdp_fee_vault.to_account_info(),
+                cdp_config: ctx.accounts.cdp_config.to_account_info(),
+                global_pool: ctx.accounts.global_pool.to_account_info(),
                 treasury: ctx.accounts.treasury.to_account_info(),
             },
-            signer,
+            cdp_config_signer,
         ),
         verise_amount,
         reserve_amount,
@@ -142,6 +149,13 @@ pub struct CollectCdpFees<'info> {
         bump
     )]
     pub cdp_fee_vault: UncheckedAccount<'info>,
+
+    /// CDP config PDA — signs the register_external_revenue CPI.
+    #[account(
+        seeds = [b"cdp_config"],
+        bump = cdp_config.bump
+    )]
+    pub cdp_config: Account<'info, CdpConfig>,
 
     /// ProtocolTreasury from the staking program. Written via CPI.
     #[account(mut)]

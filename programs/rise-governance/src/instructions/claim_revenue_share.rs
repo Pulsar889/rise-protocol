@@ -12,17 +12,7 @@ pub fn handler(ctx: Context<ClaimRevenueShare>) -> Result<()> {
     let current_verise = lock.current_verise(current_slot);
     require!(current_verise > 0, GovernanceError::ZeroAmount);
 
-    // Read revenue index from treasury account data
-    let revenue_index = {
-        let treasury_data = ctx.accounts.treasury.try_borrow_data()?;
-        if treasury_data.len() >= 124 {
-            let mut bytes = [0u8; 16];
-            bytes.copy_from_slice(&treasury_data[108..124]);
-            u128::from_le_bytes(bytes)
-        } else {
-            0u128
-        }
-    };
+    let revenue_index = ctx.accounts.treasury.revenue_index;
 
     // Calculate claimable amount
     let index_delta = revenue_index
@@ -89,8 +79,12 @@ pub struct ClaimRevenueShare<'info> {
     )]
     pub lock: Account<'info, VeLock>,
 
-    /// CHECK: Staking program treasury — read only for revenue index.
-    pub treasury: AccountInfo<'info>,
+    #[account(
+        seeds = [b"protocol_treasury"],
+        bump,
+        seeds::program = rise_staking::ID
+    )]
+    pub treasury: Account<'info, rise_staking::state::ProtocolTreasury>,
 
     /// CHECK: Treasury SOL vault — PDA from staking program, bump derived by Anchor.
     #[account(
