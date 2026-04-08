@@ -424,7 +424,12 @@ pub struct RepayDebt<'info> {
     pub cdp_fee_vault: UncheckedAccount<'info>,
 
     /// CHECK: Staking pool SOL vault — receives principal portion.
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [b"pool_vault"],
+        seeds::program = rise_staking::ID,
+        bump
+    )]
     pub pool_vault: UncheckedAccount<'info>,
 
     #[account(

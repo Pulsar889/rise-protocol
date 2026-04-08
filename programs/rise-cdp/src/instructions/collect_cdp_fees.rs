@@ -13,10 +13,14 @@ use rise_staking::program::RiseStaking;
 ///
 /// Permissionless — any caller can trigger the sweep.
 pub fn handler(ctx: Context<CollectCdpFees>) -> Result<()> {
+    // Leave the rent-exempt minimum so the PDA is never garbage-collected.
+    let rent_floor = Rent::get()?.minimum_balance(0);
     let vault_balance = ctx.accounts.cdp_fee_vault.lamports();
-    require!(vault_balance > 0, CdpError::NoCdpFeesToCollect);
-
-    let total_fees = vault_balance;
+    if vault_balance <= rent_floor {
+        msg!("CDP fee vault at or below rent floor — nothing to collect");
+        return Ok(());
+    }
+    let total_fees = vault_balance - rent_floor;
 
     // ── Split: 90% staking pool, 5% reserve, 5% veRISE ─────────────────────
     const STAKING_SHARE_BPS: u64 = 9_000;
@@ -158,11 +162,21 @@ pub struct CollectCdpFees<'info> {
     pub cdp_config: Account<'info, CdpConfig>,
 
     /// ProtocolTreasury from the staking program. Written via CPI.
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [b"protocol_treasury"],
+        seeds::program = rise_staking::ID,
+        bump = treasury.bump
+    )]
     pub treasury: Account<'info, ProtocolTreasury>,
 
     /// CHECK: Treasury SOL vault — receives reserve + veRISE shares.
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [b"treasury_vault"],
+        seeds::program = rise_staking::ID,
+        bump
+    )]
     pub treasury_vault: UncheckedAccount<'info>,
 
     /// GlobalPool from staking — updated by credit_staking_revenue CPI.

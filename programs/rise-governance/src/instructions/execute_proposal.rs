@@ -4,7 +4,7 @@ use crate::errors::GovernanceError;
 
 pub fn handler(ctx: Context<ExecuteProposal>) -> Result<()> {
     let current_slot = Clock::get()?.slot;
-    let config = &ctx.accounts.config;
+    let config = &mut ctx.accounts.config;
     let proposal = &mut ctx.accounts.proposal;
 
     // Voting must have ended
@@ -28,8 +28,9 @@ pub fn handler(ctx: Context<ExecuteProposal>) -> Result<()> {
         GovernanceError::ProposalFailed
     );
 
-    // Mark as executed
+    // Mark as executed and free the active proposal slot
     proposal.executed = true;
+    config.active_proposal_count = config.active_proposal_count.saturating_sub(1);
 
     msg!("Proposal #{} executed", proposal.index);
     msg!("Votes for: {}", proposal.votes_for);
@@ -49,6 +50,7 @@ pub struct ExecuteProposal<'info> {
     pub caller: Signer<'info>,
 
     #[account(
+        mut,
         seeds = [b"governance_config"],
         bump = config.bump
     )]

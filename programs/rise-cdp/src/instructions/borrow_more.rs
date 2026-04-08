@@ -22,7 +22,24 @@ pub fn handler(ctx: Context<BorrowMore>, additional_rise_sol: u64) -> Result<()>
     let config = &ctx.accounts.collateral_config;
 
     // ── LTV check with new total debt ────────────────────────────────────────
+    // Use fresh oracle prices — position.collateral_usd_value may be stale
+    // if the collateral price has moved since the position was opened or last topped up.
+    let collateral_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.pyth_price_feed)?;
     let sol_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_feed)?;
+
+    let token_decimals = ctx.accounts.collateral_mint.decimals;
+    let decimal_scale = 10u128.pow(token_decimals as u32);
+
+    // Recompute collateral USD value at current market price.
+    let fresh_collateral_usd = (position.collateral_amount_original as u128)
+        .checked_mul(collateral_usd_price)
+        .ok_or(CdpError::MathOverflow)?
+        .checked_div(decimal_scale)
+        .ok_or(CdpError::MathOverflow)?;
+
+    // Persist the refreshed value so subsequent checks are also accurate.
+    position.collateral_usd_value = fresh_collateral_usd;
+
     let exchange_rate = ctx.accounts.global_pool.exchange_rate;
     let rate_scale = GlobalPool::RATE_SCALE;
 
@@ -46,9 +63,8 @@ pub fn handler(ctx: Context<BorrowMore>, additional_rise_sol: u64) -> Result<()>
         .checked_div(1_000_000_000)
         .ok_or(CdpError::MathOverflow)?;
 
-    // max_debt_usd = collateral_usd * max_ltv_bps / 10_000
-    let max_debt_usd = position
-        .collateral_usd_value
+    // max_debt_usd = fresh_collateral_usd * max_ltv_bps / 10_000
+    let max_debt_usd = fresh_collateral_usd
         .checked_mul(config.max_ltv_bps as u128)
         .ok_or(CdpError::MathOverflow)?
         .checked_div(10_000)
@@ -179,8 +195,14 @@ pub struct BorrowMore<'info> {
     )]
     pub cdp_config: Box<Account<'info, CdpConfig>>,
 
+    /// CHECK: Pyth price feed for the collateral token.
+    pub pyth_price_feed: AccountInfo<'info>,
+
     /// CHECK: Pyth price feed for SOL/USD.
     pub sol_price_feed: AccountInfo<'info>,
+
+    /// Collateral mint — needed for decimal scaling when recomputing collateral USD value.
+    pub collateral_mint: Box<Account<'info, Mint>>,
 
     /// The riseSOL mint — needed for the mint_for_cdp CPI.
     #[account(

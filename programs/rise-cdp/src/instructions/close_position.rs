@@ -1,7 +1,9 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer, Burn, Mint};
-use crate::state::{CdpPosition, CollateralConfig, BorrowRewardsConfig};
+use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewardsConfig};
 use crate::errors::CdpError;
+use rise_staking::state::GlobalPool;
+use rise_staking::program::RiseStaking;
 
 
 pub fn handler(ctx: Context<ClosePosition>) -> Result<()> {
@@ -34,12 +36,39 @@ pub fn handler(ctx: Context<ClosePosition>) -> Result<()> {
     );
     token::burn(cpi_ctx, total_owed)?;
 
+    // --- Notify staking pool of interest burn so exchange rate adjusts ---
+    // Burning interest riseSOL without updating staking_rise_sol_supply would
+    // leave the denominator too high, understating the exchange rate permanently.
+    let interest_burned = position.interest_accrued;
+    if interest_burned > 0 {
+        let bump = ctx.accounts.cdp_config.bump;
+        let signer_seeds: &[&[&[u8]]] = &[&[b"cdp_config", &[bump]]];
+        rise_staking::cpi::notify_rise_sol_burned(
+            CpiContext::new_with_signer(
+                ctx.accounts.staking_program.to_account_info(),
+                rise_staking::cpi::accounts::NotifyRiseSolBurned {
+                    cdp_config: ctx.accounts.cdp_config.to_account_info(),
+                    global_pool: ctx.accounts.global_pool.to_account_info(),
+                },
+                signer_seeds,
+            ),
+            interest_burned,
+        )?;
+    }
+
     // --- Decrement entitlement counter ---
     ctx.accounts.collateral_config.total_collateral_entitlements = ctx
         .accounts
         .collateral_config
         .total_collateral_entitlements
         .saturating_sub(position.collateral_amount_original);
+
+    // --- Decrement global CDP minted counter (principal only) ---
+    ctx.accounts.cdp_config.cdp_rise_sol_minted = ctx
+        .accounts
+        .cdp_config
+        .cdp_rise_sol_minted
+        .saturating_sub(position.rise_sol_debt_principal as u128);
 
     // --- Decrement global CDP debt tracker ---
     ctx.accounts.borrow_rewards_config.total_cdp_debt = ctx
@@ -132,6 +161,24 @@ pub struct ClosePosition<'info> {
     )]
     pub collateral_vault: Account<'info, TokenAccount>,
 
+    /// Global CDP config — cdp_rise_sol_minted decremented; PDA signs notify CPI.
+    #[account(
+        mut,
+        seeds = [b"cdp_config"],
+        bump = cdp_config.bump
+    )]
+    pub cdp_config: Account<'info, CdpConfig>,
+
+    /// GlobalPool from staking — updated by notify_rise_sol_burned CPI.
+    #[account(
+        mut,
+        seeds = [b"global_pool"],
+        seeds::program = rise_staking::ID,
+        bump = global_pool.bump
+    )]
+    pub global_pool: Box<Account<'info, GlobalPool>>,
+
+    pub staking_program: Program<'info, RiseStaking>,
     pub token_program: Program<'info, Token>,
 
     #[account(

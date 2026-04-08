@@ -18,6 +18,12 @@ pub fn handler(
         GovernanceError::InsufficientVeRise
     );
 
+    // Enforce active proposal cap
+    require!(
+        config.active_proposal_count < GovernanceConfig::MAX_ACTIVE_PROPOSALS,
+        GovernanceError::TooManyActiveProposals
+    );
+
     // Initialize proposal
     let proposal = &mut ctx.accounts.proposal;
     proposal.proposer = ctx.accounts.proposer.key();
@@ -35,8 +41,11 @@ pub fn handler(
     proposal.index = config.proposal_count;
     proposal.bump = ctx.bumps.proposal;
 
-    // Increment proposal count
+    // Increment proposal count and active proposal count
     config.proposal_count = config.proposal_count
+        .checked_add(1)
+        .ok_or(GovernanceError::MathOverflow)?;
+    config.active_proposal_count = config.active_proposal_count
         .checked_add(1)
         .ok_or(GovernanceError::MathOverflow)?;
 

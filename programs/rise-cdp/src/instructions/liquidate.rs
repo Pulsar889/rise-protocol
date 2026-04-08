@@ -321,7 +321,12 @@ pub struct Liquidate<'info> {
     pub cdp_fee_vault: UncheckedAccount<'info>,
 
     /// CHECK: Staking pool SOL vault — receives principal portion of Jupiter swap output.
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [b"pool_vault"],
+        seeds::program = rise_staking::ID,
+        bump
+    )]
     pub pool_vault: UncheckedAccount<'info>,
 
     /// Native SOL (WSOL) mint — Jupiter outputs WSOL which is then unwrapped.

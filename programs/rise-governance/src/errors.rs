@@ -52,4 +52,10 @@ pub enum GovernanceError {
 
     #[msg("Vault did not receive the expected token amount")]
     TransferAmountMismatch,
+
+    #[msg("Maximum number of active proposals (10) already reached")]
+    TooManyActiveProposals,
+
+    #[msg("Unauthorized caller")]
+    Unauthorized,
 }

@@ -89,6 +89,12 @@ pub fn handler(ctx: Context<WithdrawExcess>, amount: u64) -> Result<()> {
         .checked_sub(amount)
         .ok_or(CdpError::MathOverflow)?;
 
+    ctx.accounts.collateral_config.total_collateral_entitlements = ctx
+        .accounts
+        .collateral_config
+        .total_collateral_entitlements
+        .saturating_sub(amount);
+
     // Update collateral USD value
     position.collateral_usd_value = (position.collateral_amount_original as u128)
         .checked_mul(collateral_usd_price)
@@ -117,6 +123,7 @@ pub struct WithdrawExcess<'info> {
     pub position: Account<'info, CdpPosition>,
 
     #[account(
+        mut,
         seeds = [b"collateral_config", collateral_config.mint.as_ref()],
         bump = collateral_config.bump
     )]
