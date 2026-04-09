@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Transfer, Burn, Mint, SyncNative};
+use anchor_spl::token::{self, Token, TokenAccount, Transfer, Burn, Mint, SyncNative, CloseAccount};
 use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig};
 use crate::errors::CdpError;
 use rise_staking::program::RiseStaking;
@@ -218,6 +218,19 @@ pub fn handler(
                     signer_seeds,
                 )?;
 
+                // Close the buyback vault to sweep any residual WSOL to pool_vault.
+                token::close_account(
+                    CpiContext::new_with_signer(
+                        ctx.accounts.token_program.to_account_info(),
+                        CloseAccount {
+                            account:     ctx.accounts.cdp_wsol_buyback_vault.to_account_info(),
+                            destination: ctx.accounts.pool_vault.to_account_info(),
+                            authority:   ctx.accounts.cdp_config.to_account_info(),
+                        },
+                        signer_seeds,
+                    ),
+                )?;
+
                 msg!(
                     "Treasury buyback complete: {} lamports WSOL → collateral tokens for borrower",
                     shortfall_sol
@@ -334,6 +347,16 @@ pub struct RepayDebtRiseSol<'info> {
         bump
     )]
     pub treasury_vault: UncheckedAccount<'info>,
+
+    /// Staking pool SOL vault — receives residual WSOL swept from buyback vault after swap.
+    /// CHECK: PDA verified by seeds on the staking program.
+    #[account(
+        mut,
+        seeds = [b"pool_vault"],
+        seeds::program = rise_staking::ID,
+        bump
+    )]
+    pub pool_vault: UncheckedAccount<'info>,
 
     /// Native SOL (WSOL) mint — needed for Jupiter buyback swap.
     pub wsol_mint: Box<Account<'info, Mint>>,

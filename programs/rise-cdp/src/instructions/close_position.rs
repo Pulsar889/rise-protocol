@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer, Burn, Mint};
-use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewardsConfig};
+use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig};
 use crate::errors::CdpError;
 use rise_staking::state::GlobalPool;
 use rise_staking::program::RiseStaking;
@@ -62,6 +62,17 @@ pub fn handler(ctx: Context<ClosePosition>) -> Result<()> {
         .collateral_config
         .total_collateral_entitlements
         .saturating_sub(position.collateral_amount_original);
+
+    // --- Settle borrow rewards before zeroing debt ---
+    // Captures all RISE rewards accrued since the last checkpoint into pending_rewards
+    // so they remain claimable via claim_borrow_rewards after the position is closed.
+    {
+        let reward_per_token = ctx.accounts.borrow_rewards_config.reward_per_token;
+        let current_debt = position.rise_sol_debt_principal;
+        ctx.accounts.borrow_rewards.settle(reward_per_token, current_debt)?;
+        // Sync debt to zero so future settle() calls on the closed position produce 0.
+        ctx.accounts.borrow_rewards.sync_debt(reward_per_token, 0)?;
+    }
 
     // --- Decrement global CDP minted counter (principal only) ---
     ctx.accounts.cdp_config.cdp_rise_sol_minted = ctx
@@ -187,4 +198,14 @@ pub struct ClosePosition<'info> {
         bump = borrow_rewards_config.bump
     )]
     pub borrow_rewards_config: Account<'info, BorrowRewardsConfig>,
+
+    /// Per-position borrow rewards — settled here so pending RISE is not lost on close.
+    /// Remains open after close_position; call claim_borrow_rewards to collect pending RISE.
+    #[account(
+        mut,
+        seeds = [b"borrow_rewards", position.key().as_ref()],
+        bump = borrow_rewards.bump,
+        constraint = borrow_rewards.position == position.key()
+    )]
+    pub borrow_rewards: Account<'info, BorrowRewards>,
 }

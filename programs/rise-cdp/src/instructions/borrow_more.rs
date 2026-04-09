@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};
-use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig};
+use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig, PaymentConfig};
 use crate::errors::CdpError;
 use rise_staking::state::GlobalPool;
 use rise_staking::program::RiseStaking;
@@ -195,10 +195,19 @@ pub struct BorrowMore<'info> {
     )]
     pub cdp_config: Box<Account<'info, CdpConfig>>,
 
-    /// CHECK: Pyth price feed for the collateral token.
+    /// SOL payment config — provides the registered SOL/USD price feed pubkey for validation.
+    #[account(
+        seeds = [b"payment_config", anchor_lang::solana_program::system_program::ID.as_ref()],
+        bump = sol_payment_config.bump,
+    )]
+    pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
+
+    /// CHECK: Pyth price feed for the collateral token — must match collateral_config.pyth_price_feed.
+    #[account(constraint = pyth_price_feed.key() == collateral_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
     pub pyth_price_feed: AccountInfo<'info>,
 
-    /// CHECK: Pyth price feed for SOL/USD.
+    /// CHECK: Pyth price feed for SOL/USD — must match sol_payment_config.pyth_price_feed.
+    #[account(constraint = sol_price_feed.key() == sol_payment_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
     pub sol_price_feed: AccountInfo<'info>,
 
     /// Collateral mint — needed for decimal scaling when recomputing collateral USD value.

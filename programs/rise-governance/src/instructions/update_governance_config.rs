@@ -14,6 +14,10 @@ pub fn handler(
     let config = &mut ctx.accounts.config;
 
     if let Some(threshold) = proposal_threshold {
+        require!(
+            threshold >= GovernanceConfig::MIN_PROPOSAL_THRESHOLD,
+            GovernanceError::InvalidConfig
+        );
         msg!("proposal_threshold: {} → {}", config.proposal_threshold, threshold);
         config.proposal_threshold = threshold;
     }
@@ -32,6 +36,7 @@ pub fn handler(
     }
 
     if let Some(timelock) = timelock_slots {
+        require!(timelock >= 151_200, GovernanceError::InvalidConfig); // min ~1 day
         require!(timelock <= 453_600, GovernanceError::InvalidConfig);
         msg!("timelock_slots: {} → {}", config.timelock_slots, timelock);
         config.timelock_slots = timelock;

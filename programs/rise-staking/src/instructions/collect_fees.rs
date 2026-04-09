@@ -104,17 +104,12 @@ pub fn handler(ctx: Context<CollectFees>) -> Result<()> {
         );
         system_program::transfer(cpi_ctx, verise_amount)?;
 
-        // Update revenue index so veRISE holders can claim
-        // index += verise_amount * INDEX_SCALE
-        // (divided by total_verise when claiming — stored as raw amount here
-        // and divided per-user in claim_revenue_share)
+        // Update revenue index so veRISE holders can claim.
+        // Standard accumulator: index += raw_lamports.
+        // At claim time: claimable = index_delta * user_verise / total_verise.
         treasury.revenue_index = treasury
             .revenue_index
-            .checked_add(
-                (verise_amount as u128)
-                    .checked_mul(ProtocolTreasury::INDEX_SCALE)
-                    .ok_or(StakingError::MathOverflow)?
-            )
+            .checked_add(verise_amount as u128)
             .ok_or(StakingError::MathOverflow)?;
 
         treasury.total_distributed = treasury

@@ -352,6 +352,20 @@ pub fn handler(
                 config_signer,
             )?;
 
+            // Close the buyback vault to sweep any residual WSOL (slippage dust) to pool_vault.
+            // Without this, small leftover amounts would accumulate permanently in the global vault.
+            token::close_account(
+                CpiContext::new_with_signer(
+                    ctx.accounts.token_program.to_account_info(),
+                    CloseAccount {
+                        account:     ctx.accounts.cdp_wsol_buyback_vault.to_account_info(),
+                        destination: ctx.accounts.pool_vault.to_account_info(),
+                        authority:   ctx.accounts.cdp_config.to_account_info(),
+                    },
+                    config_signer,
+                ),
+            )?;
+
             msg!(
                 "Shortfall buyback: {} lamports WSOL → collateral tokens for borrower",
                 shortfall_sol_divert

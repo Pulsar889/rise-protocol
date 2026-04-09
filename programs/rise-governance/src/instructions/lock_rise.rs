@@ -53,17 +53,9 @@ pub fn handler(
         GovernanceError::TransferAmountMismatch
     );
 
-    // Read revenue index from treasury account data
-    let revenue_index = {
-        let treasury_data = ctx.accounts.treasury.try_borrow_data()?;
-        if treasury_data.len() >= 124 {
-            let mut bytes = [0u8; 16];
-            bytes.copy_from_slice(&treasury_data[108..124]);
-            u128::from_le_bytes(bytes)
-        } else {
-            0u128
-        }
-    };
+    // Read the current revenue index from the validated staking treasury account.
+    // The account is now fully deserialized and seed-verified, so no raw byte access is needed.
+    let revenue_index = ctx.accounts.treasury.revenue_index;
 
     // ── Assign sequential lock number ────────────────────────────────────────
     config.lock_count = config.lock_count
@@ -228,8 +220,14 @@ pub struct LockRise<'info> {
 
     // ── Misc ─────────────────────────────────────────────────────────────────
 
-    /// CHECK: Read-only reference to staking treasury for revenue index.
-    pub treasury: AccountInfo<'info>,
+    /// Staking protocol treasury — read for the current revenue index so the new lock's
+    /// baseline is set correctly. Seeds verified against the staking program.
+    #[account(
+        seeds = [b"protocol_treasury"],
+        bump,
+        seeds::program = rise_staking::ID
+    )]
+    pub treasury: Account<'info, rise_staking::state::ProtocolTreasury>,
 
     pub token_program: Program<'info, Token>,
     pub associated_token_program: Program<'info, AssociatedToken>,

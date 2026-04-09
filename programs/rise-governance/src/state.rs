@@ -22,11 +22,15 @@ pub struct GovernanceConfig {
     pub proposal_count: u64,
     /// Sequential counter used to name veRISE Lock NFTs (#1, #2, …)
     pub lock_count: u64,
+    /// Number of proposals that are still open (not yet executed or closed).
+    pub active_proposal_count: u64,
     pub bump: u8,
 }
 
 impl GovernanceConfig {
-    pub const SIZE: usize = 8 + 32 + 32 + 16 + 8 + 8 + 8 + 8 + 8 + 2 + 8 + 8 + 1;
+    pub const MAX_ACTIVE_PROPOSALS: u64 = 10;
+    pub const MIN_PROPOSAL_THRESHOLD: u64 = 100_000;
+    pub const SIZE: usize = 8 + 32 + 32 + 16 + 8 + 8 + 8 + 8 + 8 + 2 + 8 + 8 + 8 + 1;
     pub const SLOTS_PER_WEEK: u64 = 604_800;
     pub const SLOTS_PER_YEAR: u64 = 78_840_000;
     pub const MAX_LOCK_SLOTS: u64 = 4 * 78_840_000;

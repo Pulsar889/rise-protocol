@@ -9,6 +9,10 @@ pub fn handler(
     quorum_bps: u16,
 ) -> Result<()> {
     require!(quorum_bps <= 10_000, GovernanceError::InvalidGaugeWeights);
+    require!(
+        proposal_threshold >= GovernanceConfig::MIN_PROPOSAL_THRESHOLD,
+        GovernanceError::InvalidConfig
+    );
 
     let config = &mut ctx.accounts.config;
 
@@ -23,6 +27,7 @@ pub fn handler(
     config.quorum_bps = quorum_bps;
     config.proposal_count = 0;
     config.lock_count = 0;
+    config.active_proposal_count = 0;
     config.bump = ctx.bumps.config;
 
     msg!("Governance initialized");

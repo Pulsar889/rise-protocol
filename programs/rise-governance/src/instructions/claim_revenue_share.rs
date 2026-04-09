@@ -8,9 +8,9 @@ pub fn handler(ctx: Context<ClaimRevenueShare>) -> Result<()> {
     let lock = &mut ctx.accounts.lock;
     let config = &ctx.accounts.config;
 
-    // Get current veRISE weight
+    // Guard: expired locks (current_verise == 0 when slot >= lock_end_slot) cannot claim.
     let current_verise = lock.current_verise(current_slot);
-    require!(current_verise > 0, GovernanceError::ZeroAmount);
+    require!(current_verise > 0, GovernanceError::LockExpired);
 
     let revenue_index = ctx.accounts.treasury.revenue_index;
 
@@ -20,10 +20,15 @@ pub fn handler(ctx: Context<ClaimRevenueShare>) -> Result<()> {
 
     require!(index_delta > 0, GovernanceError::NoRewardsToClaim);
 
-    // claimable = index_delta * current_verise / total_verise
+    // claimable = index_delta * lock.verise_amount / total_verise
+    //
+    // Uses the lock's initial (non-decayed) verise_amount so that revenue share is
+    // proportional to lock size. This ensures sum(all claimable) == index_delta,
+    // preventing chronic under-distribution caused by mixing decayed and initial values.
+    // The expiry guard above prevents expired locks from claiming.
     let claimable = if config.total_verise > 0 {
         index_delta
-            .checked_mul(current_verise as u128)
+            .checked_mul(lock.verise_amount as u128)
             .ok_or(GovernanceError::MathOverflow)?
             .checked_div(config.total_verise)
             .ok_or(GovernanceError::MathOverflow)? as u64

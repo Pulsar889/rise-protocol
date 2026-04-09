@@ -84,4 +84,13 @@ pub mod rise_governance {
     pub fn close_proposal(ctx: Context<CloseProposal>) -> Result<()> {
         instructions::close_proposal::handler(ctx)
     }
+
+    /// One-time devnet migration: reallocs governance_config 147 → 155 bytes.
+    /// Safe to leave in production — it checks current size == 147 and will
+    /// no-op (fail) on an already-migrated account.
+    pub fn migrate_governance_config(
+        ctx: Context<MigrateGovernanceConfig>,
+    ) -> Result<()> {
+        instructions::migrate_governance_config::handler(ctx)
+    }
 }

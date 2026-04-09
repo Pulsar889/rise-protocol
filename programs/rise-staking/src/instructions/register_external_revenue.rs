@@ -16,13 +16,11 @@ pub fn handler(
     let treasury = &mut ctx.accounts.treasury;
 
     if verise_lamports > 0 {
+        // Standard accumulator: index += raw_lamports (no INDEX_SCALE).
+        // At claim time: claimable = index_delta * user_verise / total_verise.
         treasury.revenue_index = treasury
             .revenue_index
-            .checked_add(
-                (verise_lamports as u128)
-                    .checked_mul(ProtocolTreasury::INDEX_SCALE)
-                    .ok_or(StakingError::MathOverflow)?,
-            )
+            .checked_add(verise_lamports as u128)
             .ok_or(StakingError::MathOverflow)?;
 
         treasury.total_distributed = treasury

@@ -70,4 +70,7 @@ pub enum CdpError {
 
     #[msg("Caller is not authorized for this operation")]
     Unauthorized,
+
+    #[msg("Price feed account does not match the one registered for this collateral")]
+    WrongPriceFeed,
 }

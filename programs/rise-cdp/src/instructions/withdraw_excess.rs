@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
-use crate::state::{CdpPosition, CollateralConfig};
+use crate::state::{CdpPosition, CollateralConfig, PaymentConfig};
 use crate::errors::CdpError;
 
 pub fn handler(ctx: Context<WithdrawExcess>, amount: u64) -> Result<()> {
@@ -146,10 +146,19 @@ pub struct WithdrawExcess<'info> {
     )]
     pub collateral_vault: Account<'info, TokenAccount>,
 
-    /// CHECK: Pyth price feed for collateral.
+    /// SOL payment config — provides the registered SOL/USD price feed pubkey for validation.
+    #[account(
+        seeds = [b"payment_config", anchor_lang::solana_program::system_program::ID.as_ref()],
+        bump = sol_payment_config.bump,
+    )]
+    pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
+
+    /// CHECK: Pyth price feed for collateral — must match collateral_config.pyth_price_feed.
+    #[account(constraint = pyth_price_feed.key() == collateral_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
     pub pyth_price_feed: AccountInfo<'info>,
 
-    /// CHECK: Pyth price feed for SOL.
+    /// CHECK: Pyth price feed for SOL — must match sol_payment_config.pyth_price_feed.
+    #[account(constraint = sol_price_feed.key() == sol_payment_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
     pub sol_price_feed: AccountInfo<'info>,
 
     pub token_program: Program<'info, Token>,
