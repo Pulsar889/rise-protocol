@@ -19,6 +19,7 @@ pub mod initialize_borrow_rewards;
 pub mod checkpoint_borrow_rewards;
 pub mod claim_borrow_rewards;
 pub mod close_borrow_rewards;
+pub mod initialize_wsol_vaults;
 
 pub use initialize_cdp_config::*;
 pub use update_debt_ceiling::*;
@@ -41,3 +42,4 @@ pub use initialize_borrow_rewards::*;
 pub use checkpoint_borrow_rewards::*;
 pub use claim_borrow_rewards::*;
 pub use close_borrow_rewards::*;
+pub use initialize_wsol_vaults::*;

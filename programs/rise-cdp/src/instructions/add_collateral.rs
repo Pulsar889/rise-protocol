@@ -90,11 +90,12 @@ pub struct AddCollateral<'info> {
     #[account(
         mut,
         seeds = [b"collateral_config", collateral_config.mint.as_ref()],
-        bump = collateral_config.bump
+        bump = collateral_config.bump,
+        constraint = collateral_config.mint == position.collateral_mint @ CdpError::CollateralNotAccepted
     )]
     pub collateral_config: Account<'info, CollateralConfig>,
 
-    /// CHECK: collateral mint for decimal info
+    #[account(constraint = collateral_mint.key() == collateral_config.mint @ CdpError::CollateralNotAccepted)]
     pub collateral_mint: Account<'info, anchor_spl::token::Mint>,
 
     #[account(

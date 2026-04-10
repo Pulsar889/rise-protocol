@@ -185,6 +185,11 @@ pub struct BorrowMore<'info> {
     pub collateral_config: Box<Account<'info, CollateralConfig>>,
 
     /// GlobalPool from the staking program — read for exchange rate and staking supply.
+    #[account(
+        seeds = [b"global_pool"],
+        seeds::program = rise_staking::ID,
+        bump = global_pool.bump
+    )]
     pub global_pool: Box<Account<'info, GlobalPool>>,
 
     /// Global CDP config — tracks total CDP riseSOL minted and debt ceiling.
@@ -211,6 +216,7 @@ pub struct BorrowMore<'info> {
     pub sol_price_feed: AccountInfo<'info>,
 
     /// Collateral mint — needed for decimal scaling when recomputing collateral USD value.
+    #[account(constraint = collateral_mint.key() == collateral_config.mint @ CdpError::CollateralNotAccepted)]
     pub collateral_mint: Box<Account<'info, Mint>>,
 
     /// The riseSOL mint — needed for the mint_for_cdp CPI.

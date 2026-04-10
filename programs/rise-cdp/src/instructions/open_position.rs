@@ -204,6 +204,11 @@ pub struct OpenPosition<'info> {
     pub cdp_config: Box<Account<'info, CdpConfig>>,
 
     /// GlobalPool from staking — read-only for staking_rise_sol_supply (ceiling denominator).
+    #[account(
+        seeds = [b"global_pool"],
+        seeds::program = rise_staking::ID,
+        bump = global_pool.bump
+    )]
     pub global_pool: Box<Account<'info, GlobalPool>>,
 
     #[account(
@@ -222,7 +227,8 @@ pub struct OpenPosition<'info> {
     )]
     pub collateral_config: Box<Account<'info, CollateralConfig>>,
 
-    /// The collateral token mint.
+    /// The collateral token mint — decimal precision used for USD value scaling.
+    #[account(constraint = collateral_mint.key() == collateral_config.mint @ CdpError::CollateralNotAccepted)]
     pub collateral_mint: Box<Account<'info, Mint>>,
 
     /// Borrower's collateral token account to transfer from.
@@ -236,6 +242,8 @@ pub struct OpenPosition<'info> {
     /// Protocol's collateral vault for this token type.
     #[account(
         mut,
+        seeds = [b"collateral_vault", collateral_config.mint.as_ref()],
+        bump,
         constraint = collateral_vault.mint == collateral_config.mint
     )]
     pub collateral_vault: Box<Account<'info, TokenAccount>>,

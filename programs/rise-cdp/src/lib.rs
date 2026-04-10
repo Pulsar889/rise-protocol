@@ -216,4 +216,11 @@ pub mod rise_cdp {
     pub fn close_borrow_rewards(ctx: Context<CloseBorrowRewards>) -> Result<()> {
         instructions::close_borrow_rewards::handler(ctx)
     }
+
+    /// One-time deploy step: creates cdp_wsol_vault and cdp_wsol_buyback_vault.
+    /// Must be called after initialize_cdp_config and before any repay_debt calls.
+    /// Authority only.
+    pub fn initialize_wsol_vaults(ctx: Context<InitializeWsolVaults>) -> Result<()> {
+        instructions::initialize_wsol_vaults::handler(ctx)
+    }
 }

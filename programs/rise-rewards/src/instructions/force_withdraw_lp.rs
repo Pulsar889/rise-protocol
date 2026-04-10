@@ -92,14 +92,14 @@ pub struct ForceWithdrawLp<'info> {
         seeds = [b"rewards_config"],
         bump = config.bump,
     )]
-    pub config: Account<'info, RewardsConfig>,
+    pub config: Box<Account<'info, RewardsConfig>>,
 
     #[account(
         mut,
         seeds = [b"gauge", gauge.pool.as_ref()],
         bump = gauge.bump,
     )]
-    pub gauge: Account<'info, Gauge>,
+    pub gauge: Box<Account<'info, Gauge>>,
 
     #[account(
         mut,
@@ -107,7 +107,7 @@ pub struct ForceWithdrawLp<'info> {
         bump = user_stake.bump,
         close = depositor
     )]
-    pub user_stake: Account<'info, UserStake>,
+    pub user_stake: Box<Account<'info, UserStake>>,
 
     /// CHECK: The depositor — receives LP tokens, RISE rewards, and rent from user_stake close.
     /// Verified via user_stake.owner.
@@ -122,7 +122,7 @@ pub struct ForceWithdrawLp<'info> {
         mut,
         constraint = user_lp_account.owner == user_stake.owner @ RewardsError::Unauthorized
     )]
-    pub user_lp_account: Account<'info, TokenAccount>,
+    pub user_lp_account: Box<Account<'info, TokenAccount>>,
 
     /// Depositor's RISE token account — receives any pending rewards.
     #[account(
@@ -130,14 +130,14 @@ pub struct ForceWithdrawLp<'info> {
         constraint = user_rise_account.mint == config.rise_mint @ RewardsError::Unauthorized,
         constraint = user_rise_account.owner == user_stake.owner @ RewardsError::Unauthorized
     )]
-    pub user_rise_account: Account<'info, TokenAccount>,
+    pub user_rise_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
         seeds = [b"gauge_lp_vault", gauge.pool.as_ref()],
         bump,
     )]
-    pub gauge_lp_vault: Account<'info, TokenAccount>,
+    pub gauge_lp_vault: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
@@ -145,7 +145,7 @@ pub struct ForceWithdrawLp<'info> {
         bump,
         constraint = rewards_vault.mint == config.rise_mint @ RewardsError::Unauthorized
     )]
-    pub rewards_vault: Account<'info, TokenAccount>,
+    pub rewards_vault: Box<Account<'info, TokenAccount>>,
 
     pub token_program: Program<'info, Token>,
 }

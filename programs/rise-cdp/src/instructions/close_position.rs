@@ -134,18 +134,22 @@ pub struct ClosePosition<'info> {
         constraint = position.owner == borrower.key(),
         constraint = position.is_open @ CdpError::PositionClosed
     )]
-    pub position: Account<'info, CdpPosition>,
+    pub position: Box<Account<'info, CdpPosition>>,
 
     #[account(
         mut,
         seeds = [b"collateral_config", collateral_config.mint.as_ref()],
-        bump = collateral_config.bump
+        bump = collateral_config.bump,
+        constraint = collateral_config.mint == position.collateral_mint @ CdpError::CollateralNotAccepted
     )]
-    pub collateral_config: Account<'info, CollateralConfig>,
+    pub collateral_config: Box<Account<'info, CollateralConfig>>,
 
     /// The riseSOL mint.
-    #[account(mut)]
-    pub rise_sol_mint: Account<'info, Mint>,
+    #[account(
+        mut,
+        address = global_pool.rise_sol_mint
+    )]
+    pub rise_sol_mint: Box<Account<'info, Mint>>,
 
     /// Borrower's riseSOL account to burn from.
     #[account(
@@ -153,7 +157,7 @@ pub struct ClosePosition<'info> {
         constraint = borrower_rise_sol_account.mint == rise_sol_mint.key(),
         constraint = borrower_rise_sol_account.owner == borrower.key()
     )]
-    pub borrower_rise_sol_account: Account<'info, TokenAccount>,
+    pub borrower_rise_sol_account: Box<Account<'info, TokenAccount>>,
 
     /// Borrower's collateral account to return tokens to.
     #[account(
@@ -161,7 +165,7 @@ pub struct ClosePosition<'info> {
         constraint = borrower_collateral_account.mint == collateral_config.mint,
         constraint = borrower_collateral_account.owner == borrower.key()
     )]
-    pub borrower_collateral_account: Account<'info, TokenAccount>,
+    pub borrower_collateral_account: Box<Account<'info, TokenAccount>>,
 
     /// Protocol collateral vault.
     #[account(
@@ -170,7 +174,7 @@ pub struct ClosePosition<'info> {
         bump,
         constraint = collateral_vault.mint == collateral_config.mint
     )]
-    pub collateral_vault: Account<'info, TokenAccount>,
+    pub collateral_vault: Box<Account<'info, TokenAccount>>,
 
     /// Global CDP config — cdp_rise_sol_minted decremented; PDA signs notify CPI.
     #[account(
@@ -178,7 +182,7 @@ pub struct ClosePosition<'info> {
         seeds = [b"cdp_config"],
         bump = cdp_config.bump
     )]
-    pub cdp_config: Account<'info, CdpConfig>,
+    pub cdp_config: Box<Account<'info, CdpConfig>>,
 
     /// GlobalPool from staking — updated by notify_rise_sol_burned CPI.
     #[account(
@@ -197,7 +201,7 @@ pub struct ClosePosition<'info> {
         seeds = [b"borrow_rewards_config"],
         bump = borrow_rewards_config.bump
     )]
-    pub borrow_rewards_config: Account<'info, BorrowRewardsConfig>,
+    pub borrow_rewards_config: Box<Account<'info, BorrowRewardsConfig>>,
 
     /// Per-position borrow rewards — settled here so pending RISE is not lost on close.
     /// Remains open after close_position; call claim_borrow_rewards to collect pending RISE.
@@ -207,5 +211,5 @@ pub struct ClosePosition<'info> {
         bump = borrow_rewards.bump,
         constraint = borrow_rewards.position == position.key()
     )]
-    pub borrow_rewards: Account<'info, BorrowRewards>,
+    pub borrow_rewards: Box<Account<'info, BorrowRewards>>,
 }
