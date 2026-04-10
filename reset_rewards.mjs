@@ -3,7 +3,12 @@
  *
  * 1. Closes the existing RewardsConfig (reclaims rent, wipes gauge_count)
  * 2. Re-initializes RewardsConfig with the same settings
- * 3. Creates 3 gauges (riseSOL/SOL, riseSOL/USDC, RISE/SOL)
+ * 3. Closes ALL existing Gauge accounts (prevents accumulation across resets)
+ * 4. Creates 3 gauges (riseSOL/SOL, riseSOL/USDC, RISE/SOL)
+ *
+ * Steps 1 and 3 are critical: without closing old gauges before creating new
+ * ones, orphaned gauge accounts accumulate on-chain and the frontend shows
+ * them all (gauge.all() returns every Gauge owned by the program).
  *
  * The rewards_vault token account is NOT touched — it already exists and is
  * still valid because the rewards_config PDA address is deterministic.
@@ -61,7 +66,7 @@ console.log("Authority:", keypair.publicKey.toBase58());
 console.log("RewardsConfig PDA:", config.toBase58());
 
 // ── Step 1: Close existing config ─────────────────────────────────────────────
-console.log("\n[1/3] Closing existing RewardsConfig...");
+console.log("\n[1/4] Closing existing RewardsConfig...");
 try {
   const tx = await program.methods
     .closeRewardsConfig()
@@ -81,7 +86,7 @@ try {
 }
 
 // ── Step 2: Re-initialize config ─────────────────────────────────────────────
-console.log("\n[2/3] Re-initializing RewardsConfig...");
+console.log("\n[2/4] Re-initializing RewardsConfig...");
 try {
   const tx = await program.methods
     .initializeRewards(EPOCH_EMISSIONS)
@@ -99,8 +104,36 @@ try {
   process.exit(1);
 }
 
-// ── Step 3: Create 3 gauges ───────────────────────────────────────────────────
-console.log("\n[3/3] Creating gauges...");
+// ── Step 3: Close ALL existing gauge accounts ─────────────────────────────────
+// Must happen after config is re-initialized (close_gauge requires config for
+// authority validation). Prevents orphaned gauges from accumulating on-chain.
+console.log("\n[3/4] Closing all existing gauge accounts...");
+const existingGauges = await program.account.gauge.all();
+if (existingGauges.length === 0) {
+  console.log("  No existing gauges found.");
+} else {
+  console.log(`  Found ${existingGauges.length} gauge(s) to close.`);
+  for (const { publicKey: gaugePda, account: gaugeAcc } of existingGauges) {
+    try {
+      const tx = await program.methods
+        .closeGauge()
+        .accounts({
+          authority: keypair.publicKey,
+          config,
+          gauge:     gaugePda,
+        })
+        .rpc();
+      console.log(`  Closed gauge #${gaugeAcc.index} (${gaugePda.toBase58()}). Tx: ${tx}`);
+    } catch (err) {
+      console.error(`  Failed to close gauge ${gaugePda.toBase58()}:`, err.message);
+      if (err.logs) console.error(err.logs);
+      process.exit(1);
+    }
+  }
+}
+
+// ── Step 4: Create 3 gauges ───────────────────────────────────────────────────
+console.log("\n[4/4] Creating gauges...");
 let index = 0;
 for (const [label, pool] of Object.entries(GAUGE_POOLS)) {
   const [gaugePda] = PublicKey.findProgramAddressSync(
