@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer, Mint, CloseAccount};
-use crate::state::{CollateralConfig, CdpConfig};
+use crate::state::{CollateralConfig, CdpConfig, PaymentConfig};
 use crate::errors::CdpError;
 use rise_staking::state::GlobalPool;
 
@@ -164,7 +164,12 @@ pub struct RedeemCollateralForLiquidity<'info> {
     pub caller: Signer<'info>,
 
     /// GlobalPool from staking — read to verify the liquidity shortfall condition.
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [b"global_pool"],
+        seeds::program = rise_staking::ID,
+        bump = global_pool.bump
+    )]
     pub global_pool: Account<'info, GlobalPool>,
 
     #[account(
@@ -173,6 +178,7 @@ pub struct RedeemCollateralForLiquidity<'info> {
     )]
     pub collateral_config: Account<'info, CollateralConfig>,
 
+    #[account(constraint = collateral_mint.key() == collateral_config.mint @ CdpError::CollateralNotAccepted)]
     pub collateral_mint: Account<'info, Mint>,
 
     #[account(
@@ -203,6 +209,7 @@ pub struct RedeemCollateralForLiquidity<'info> {
     pub cdp_config: Account<'info, CdpConfig>,
 
     /// Native SOL (WSOL) mint — Jupiter outputs WSOL which is then unwrapped.
+    #[account(address = anchor_spl::token::spl_token::native_mint::ID)]
     pub wsol_mint: Account<'info, Mint>,
 
     /// Protocol WSOL buffer: receives Jupiter's WSOL output, then closed → pool_vault.
@@ -225,10 +232,19 @@ pub struct RedeemCollateralForLiquidity<'info> {
     )]
     pub pool_vault: UncheckedAccount<'info>,
 
-    /// CHECK: Pyth price feed for the collateral token.
+    /// SOL payment config — provides the registered SOL/USD price feed pubkey for validation.
+    #[account(
+        seeds = [b"payment_config", anchor_lang::solana_program::system_program::ID.as_ref()],
+        bump = sol_payment_config.bump,
+    )]
+    pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
+
+    /// CHECK: Pyth price feed for the collateral token — must match collateral_config.pyth_price_feed.
+    #[account(constraint = pyth_price_feed.key() == collateral_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
     pub pyth_price_feed: AccountInfo<'info>,
 
-    /// CHECK: Pyth price feed for SOL/USD.
+    /// CHECK: Pyth price feed for SOL/USD — must match sol_payment_config.pyth_price_feed.
+    #[account(constraint = sol_price_feed.key() == sol_payment_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
     pub sol_price_feed: AccountInfo<'info>,
 
     pub staking_program: Program<'info, rise_staking::program::RiseStaking>,

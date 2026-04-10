@@ -58,6 +58,8 @@ pub struct ExecuteProposal<'info> {
 
     #[account(
         mut,
+        seeds = [b"proposal", &proposal.index.to_le_bytes()],
+        bump = proposal.bump,
         constraint = !proposal.executed @ GovernanceError::AlreadyExecuted
     )]
     pub proposal: Account<'info, Proposal>,

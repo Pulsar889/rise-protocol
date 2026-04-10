@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer, Burn, Mint, SyncNative, CloseAccount};
-use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig};
+use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig, PaymentConfig};
 use crate::errors::CdpError;
 use rise_staking::program::RiseStaking;
 
@@ -281,7 +281,10 @@ pub struct RepayDebtRiseSol<'info> {
     pub collateral_config: Box<Account<'info, CollateralConfig>>,
 
     /// The riseSOL mint — needed to burn tokens.
-    #[account(mut)]
+    #[account(
+        mut,
+        address = global_pool.rise_sol_mint
+    )]
     pub rise_sol_mint: Box<Account<'info, Mint>>,
 
     /// Borrower's riseSOL token account to burn from.
@@ -310,6 +313,7 @@ pub struct RepayDebtRiseSol<'info> {
     pub borrower_collateral_account: Box<Account<'info, TokenAccount>>,
 
     /// Collateral token mint — needed for decimal scaling in shortfall SOL computation.
+    #[account(constraint = collateral_mint.key() == collateral_config.mint @ CdpError::CollateralNotAccepted)]
     pub collateral_mint: Box<Account<'info, Mint>>,
 
     /// Global CDP config — tracks total CDP riseSOL minted; PDA signer for staking CPIs.
@@ -359,24 +363,33 @@ pub struct RepayDebtRiseSol<'info> {
     pub pool_vault: UncheckedAccount<'info>,
 
     /// Native SOL (WSOL) mint — needed for Jupiter buyback swap.
+    #[account(address = anchor_spl::token::spl_token::native_mint::ID)]
     pub wsol_mint: Box<Account<'info, Mint>>,
 
     /// Protocol WSOL buyback vault: receives treasury SOL (via staking CPI), wrapped as WSOL,
-    /// then swapped → collateral tokens → borrower. Only funded on shortfall path.
+    /// then swapped → collateral tokens → borrower. Pre-initialized by init_wsol_vaults.
     #[account(
-        init_if_needed,
-        payer = borrower,
-        token::mint = wsol_mint,
-        token::authority = cdp_config,
+        mut,
         seeds = [b"cdp_wsol_buyback_vault"],
         bump,
+        constraint = cdp_wsol_buyback_vault.mint == wsol_mint.key(),
+        constraint = cdp_wsol_buyback_vault.owner == cdp_config.key(),
     )]
     pub cdp_wsol_buyback_vault: Box<Account<'info, TokenAccount>>,
 
+    /// SOL payment config — provides the registered SOL/USD price feed pubkey for validation.
+    #[account(
+        seeds = [b"payment_config", anchor_lang::solana_program::system_program::ID.as_ref()],
+        bump = sol_payment_config.bump,
+    )]
+    pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
+
     /// CHECK: Pyth price feed for the collateral token (shortfall path only).
+    #[account(constraint = pyth_price_feed.key() == collateral_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
     pub pyth_price_feed: AccountInfo<'info>,
 
     /// CHECK: Pyth price feed for SOL/USD (shortfall path only).
+    #[account(constraint = sol_price_feed.key() == sol_payment_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
     pub sol_price_feed: AccountInfo<'info>,
 
     // ── Jupiter accounts (shortfall buyback path only) ────────────────────────

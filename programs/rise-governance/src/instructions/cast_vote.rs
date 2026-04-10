@@ -69,7 +69,11 @@ pub struct CastVote<'info> {
     )]
     pub lock: Account<'info, VeLock>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        seeds = [b"proposal", &proposal.index.to_le_bytes()],
+        bump = proposal.bump,
+    )]
     pub proposal: Account<'info, Proposal>,
 
     #[account(

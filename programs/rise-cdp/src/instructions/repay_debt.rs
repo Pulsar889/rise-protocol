@@ -418,6 +418,11 @@ pub struct RepayDebt<'info> {
     )]
     pub payment_config: Box<Account<'info, PaymentConfig>>,
 
+    #[account(
+        seeds = [b"global_pool"],
+        seeds::program = rise_staking::ID,
+        bump = global_pool.bump
+    )]
     pub global_pool: Box<Account<'info, GlobalPool>>,
 
     /// Global CDP config — tracks total minted; authority for cdp_wsol_vault and cdp_wsol_buyback_vault.
@@ -462,12 +467,22 @@ pub struct RepayDebt<'info> {
     pub borrower_collateral_account: Box<Account<'info, TokenAccount>>,
 
     /// Collateral token mint — needed for decimal scaling in shortfall SOL computation.
+    #[account(constraint = collateral_mint.key() == collateral_config.mint @ CdpError::CollateralNotAccepted)]
     pub collateral_mint: Box<Account<'info, Mint>>,
 
+    /// SOL payment config — provides the registered SOL/USD price feed pubkey for validation.
+    #[account(
+        seeds = [b"payment_config", anchor_lang::solana_program::system_program::ID.as_ref()],
+        bump = sol_payment_config.bump,
+    )]
+    pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
+
     /// CHECK: Pyth price feed for the collateral token — used only when shortfall buyback occurs.
+    #[account(constraint = pyth_price_feed.key() == collateral_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
     pub pyth_price_feed: AccountInfo<'info>,
 
     /// CHECK: Pyth price feed for SOL/USD — used only when shortfall buyback occurs.
+    #[account(constraint = sol_price_feed.key() == sol_payment_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
     pub sol_price_feed: AccountInfo<'info>,
 
     // ── SPL payment token accounts (pass None for native SOL) ────────────────
@@ -481,26 +496,22 @@ pub struct RepayDebt<'info> {
     // ── WSOL / Jupiter accounts ───────────────────────────────────────────────
 
     /// Native SOL (WSOL) mint.
+    #[account(address = anchor_spl::token::spl_token::native_mint::ID)]
     pub wsol_mint: Box<Account<'info, Mint>>,
 
     /// Protocol WSOL buffer: receives Jupiter's inbound WSOL output, then closed to unwrap.
+    /// Pre-initialized by init_wsol_vaults at deploy time.
     #[account(
-        init_if_needed,
-        payer = borrower,
-        token::mint = wsol_mint,
-        token::authority = cdp_config,
+        mut,
         seeds = [b"cdp_wsol_vault"],
         bump,
     )]
     pub cdp_wsol_vault: Box<Account<'info, TokenAccount>>,
 
     /// Protocol WSOL buyback vault: holds WSOL for the reverse swap (WSOL → collateral).
-    /// Only funded when a shortfall buyback is needed on full repayment.
+    /// Pre-initialized by init_wsol_vaults at deploy time.
     #[account(
-        init_if_needed,
-        payer = borrower,
-        token::mint = wsol_mint,
-        token::authority = cdp_config,
+        mut,
         seeds = [b"cdp_wsol_buyback_vault"],
         bump,
     )]
@@ -540,7 +551,7 @@ pub struct RepayDebt<'info> {
         seeds = [b"borrow_rewards_config"],
         bump = borrow_rewards_config.bump
     )]
-    pub borrow_rewards_config: Account<'info, BorrowRewardsConfig>,
+    pub borrow_rewards_config: Box<Account<'info, BorrowRewardsConfig>>,
 
     #[account(
         mut,
@@ -548,5 +559,5 @@ pub struct RepayDebt<'info> {
         bump = borrow_rewards.bump,
         constraint = borrow_rewards.position == position.key()
     )]
-    pub borrow_rewards: Account<'info, BorrowRewards>,
+    pub borrow_rewards: Box<Account<'info, BorrowRewards>>,
 }
