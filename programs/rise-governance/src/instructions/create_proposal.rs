@@ -45,11 +45,6 @@ pub fn handler(
     proposal.index = config.proposal_count;
     proposal.bump = ctx.bumps.proposal;
 
-    debug_assert!(
-        proposal.index == config.proposal_count,
-        "proposal.index must equal config.proposal_count at the time of PDA creation"
-    );
-
     // Increment proposal count and active proposal count
     config.proposal_count = config.proposal_count
         .checked_add(1)
