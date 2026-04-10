@@ -38,8 +38,17 @@ pub fn handler(
     proposal.votes_for = 0;
     proposal.votes_against = 0;
     proposal.executed = false;
+    // Proposal PDA seeds use config.proposal_count at creation time, which must equal
+    // proposal.index. This ordering must be preserved: proposal.index is assigned before
+    // config.proposal_count is incremented, so that execute_proposal, close_proposal, and
+    // cast_vote — which derive the PDA using proposal.index — resolve to the same address.
     proposal.index = config.proposal_count;
     proposal.bump = ctx.bumps.proposal;
+
+    debug_assert!(
+        proposal.index == config.proposal_count,
+        "proposal.index must equal config.proposal_count at the time of PDA creation"
+    );
 
     // Increment proposal count and active proposal count
     config.proposal_count = config.proposal_count

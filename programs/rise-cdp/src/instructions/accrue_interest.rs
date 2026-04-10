@@ -119,6 +119,8 @@ pub struct AccrueInterest<'info> {
 
     #[account(
         mut,
+        seeds = [b"cdp_position", position.owner.as_ref(), &[position.nonce]],
+        bump = position.bump,
         constraint = position.is_open @ CdpError::PositionClosed
     )]
     pub position: Account<'info, CdpPosition>,
@@ -137,5 +139,10 @@ pub struct AccrueInterest<'info> {
     pub cdp_config: Account<'info, CdpConfig>,
 
     /// GlobalPool from staking — read for staking_rise_sol_supply (ceiling denominator).
+    #[account(
+        seeds = [b"global_pool"],
+        seeds::program = rise_staking::ID,
+        bump = global_pool.bump
+    )]
     pub global_pool: Account<'info, GlobalPool>,
 }

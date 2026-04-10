@@ -270,6 +270,8 @@ pub struct Liquidate<'info> {
 
     #[account(
         mut,
+        seeds = [b"cdp_position", position.owner.as_ref(), &[position.nonce]],
+        bump = position.bump,
         constraint = position.is_open @ CdpError::PositionClosed
     )]
     pub position: Box<Account<'info, CdpPosition>>,
@@ -282,6 +284,7 @@ pub struct Liquidate<'info> {
     )]
     pub collateral_config: Box<Account<'info, CollateralConfig>>,
 
+    #[account(constraint = collateral_mint.key() == collateral_config.mint @ CdpError::CollateralNotAccepted)]
     pub collateral_mint: Box<Account<'info, Mint>>,
 
     #[account(
@@ -301,6 +304,11 @@ pub struct Liquidate<'info> {
     pub borrower_collateral_account: Box<Account<'info, TokenAccount>>,
 
     /// GlobalPool from staking — read for exchange rate.
+    #[account(
+        seeds = [b"global_pool"],
+        seeds::program = rise_staking::ID,
+        bump = global_pool.bump
+    )]
     pub global_pool: Box<Account<'info, GlobalPool>>,
 
     /// Global CDP config — authority for cdp_wsol_vault; tracks total minted.
@@ -330,6 +338,7 @@ pub struct Liquidate<'info> {
     pub pool_vault: UncheckedAccount<'info>,
 
     /// Native SOL (WSOL) mint — Jupiter outputs WSOL which is then unwrapped.
+    #[account(address = anchor_spl::token::spl_token::native_mint::ID)]
     pub wsol_mint: Box<Account<'info, Mint>>,
 
     /// Protocol WSOL buffer: receives Jupiter's WSOL output, then closed to unwrap.
@@ -388,13 +397,15 @@ pub struct Liquidate<'info> {
         seeds = [b"borrow_rewards_config"],
         bump = borrow_rewards_config.bump
     )]
-    pub borrow_rewards_config: Account<'info, BorrowRewardsConfig>,
+    pub borrow_rewards_config: Box<Account<'info, BorrowRewardsConfig>>,
 
+    /// Borrow rewards — settled here so pending RISE is preserved for the borrower to claim
+    /// via claim_borrow_rewards after liquidation. Account remains open intentionally.
     #[account(
         mut,
         seeds = [b"borrow_rewards", position.key().as_ref()],
         bump = borrow_rewards.bump,
-        close = caller
+        constraint = borrow_rewards.position == position.key()
     )]
-    pub borrow_rewards: Account<'info, BorrowRewards>,
+    pub borrow_rewards: Box<Account<'info, BorrowRewards>>,
 }
