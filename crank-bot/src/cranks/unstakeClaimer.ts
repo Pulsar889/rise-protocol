@@ -71,6 +71,16 @@ export async function runUnstakeClaimer(client: RiseClient): Promise<void> {
   for (const { pubkey: ticketPubkey, account } of ticketAccounts) {
     const data = account.data as Buffer;
 
+    // Skip accounts from old program versions (size mismatch)
+    if (data.length !== 65) {
+      log.warn("unstake claimer: unexpected account size, skipping (old program version?)", {
+        ticket: ticketPubkey.toBase58(),
+        size: data.length,
+        expected: 65,
+      });
+      continue;
+    }
+
     // Read claimable_epoch (u64 LE, 8 bytes)
     const claimableEpoch = Number(data.readBigUInt64LE(CLAIMABLE_EPOCH_OFFSET));
 
