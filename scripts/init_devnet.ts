@@ -32,6 +32,7 @@ const PYTH_USDT_USD = new PublicKey("5SSkXsEKQepHHAewytPVwdej4epN1nxgLVM84L4KXgy
 
 // Collateral mints (devnet)
 const MINTS = {
+  WSOL:    new PublicKey("So11111111111111111111111111111111111111112"),
   riseSOL: new PublicKey("86bHg3K32cRhnfcYTr3RCgKZme4xSLZzMyzWA8qDswHp"),
   mSOL:    new PublicKey("mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So"),
   JitoSOL: new PublicKey("J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn"),
@@ -49,6 +50,7 @@ const MINTS = {
 type CollateralParams = [number, number, number, number, number, number, number, number, PublicKey];
 
 const COLLATERAL_CONFIGS: Record<string, CollateralParams> = {
+  WSOL:    [7500, 8500, 500, 100, 400, 3000, 8000, 50, PYTH_SOL_USD],
   riseSOL: [7800, 8700, 500, 100, 400, 3000, 8000, 50, PYTH_SOL_USD],
   mSOL:    [7800, 8700, 500, 100, 400, 3000, 8000, 50, PYTH_SOL_USD],
   JitoSOL: [7800, 8700, 500, 100, 400, 3000, 8000, 50, PYTH_SOL_USD],

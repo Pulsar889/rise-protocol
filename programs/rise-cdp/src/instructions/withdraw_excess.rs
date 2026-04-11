@@ -6,6 +6,7 @@ use crate::errors::CdpError;
 pub fn handler(ctx: Context<WithdrawExcess>, amount: u64) -> Result<()> {
     let position = &mut ctx.accounts.position;
     let config = &ctx.accounts.collateral_config;
+    let liquidation_threshold_bps = config.liquidation_threshold_bps;
 
     require!(position.is_open, CdpError::PositionClosed);
     require!(amount > 0, CdpError::ZeroAmount);
@@ -101,6 +102,13 @@ pub fn handler(ctx: Context<WithdrawExcess>, amount: u64) -> Result<()> {
         .ok_or(CdpError::MathOverflow)?
         .checked_div(decimal_scale)
         .ok_or(CdpError::MathOverflow)?;
+
+    // Recompute health factor to reflect the reduced collateral
+    position.health_factor = CdpPosition::compute_health_factor(
+        position.collateral_usd_value,
+        debt_usd,
+        liquidation_threshold_bps,
+    ).ok_or(CdpError::MathOverflow)?;
 
     msg!("Excess collateral withdrawn: {} tokens", amount);
 

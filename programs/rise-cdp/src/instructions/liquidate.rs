@@ -238,6 +238,8 @@ pub fn handler(
         let reward_per_token = ctx.accounts.borrow_rewards_config.reward_per_token;
         let current_debt = position.rise_sol_debt_principal;
         ctx.accounts.borrow_rewards.settle(reward_per_token, current_debt)?;
+        // Sync debt to zero so future settle() calls on the closed position produce 0.
+        ctx.accounts.borrow_rewards.sync_debt(reward_per_token, 0)?;
 
         ctx.accounts.borrow_rewards_config.total_cdp_debt = ctx
             .accounts.borrow_rewards_config.total_cdp_debt
