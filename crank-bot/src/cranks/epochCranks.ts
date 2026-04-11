@@ -95,6 +95,7 @@ export async function collectCdpFees(client: RiseClient): Promise<void> {
       .accounts({
         caller:         client.wallet.publicKey,
         cdpFeeVault:    PDAS.cdpFeeVault,
+        cdpConfig:      PDAS.cdpConfig,
         treasury:       PDAS.treasury,
         treasuryVault:  PDAS.treasuryVault,
         globalPool:     PDAS.globalPool,
@@ -111,13 +112,16 @@ export async function collectCdpFees(client: RiseClient): Promise<void> {
 // ── checkpoint_gauge (once per active gauge per epoch) ───────────────────────
 
 export async function checkpointAllGauges(client: RiseClient): Promise<void> {
+  // Gauge discriminator: sha256("account:Gauge")[..8]
+  const GAUGE_DISC = Buffer.from([9, 19, 249, 189, 158, 171, 226, 205]);
+
   // Fetch all gauge accounts belonging to the rewards program
   const gaugeAccounts = await client.connection.getProgramAccounts(
     PROGRAM_IDS.rewards,
     {
       commitment: "confirmed",
       filters: [
-        { dataSize: 113 }, // Gauge account discriminator size — adjust if needed
+        { memcmp: { offset: 0, bytes: GAUGE_DISC.toString("base64"), encoding: "base64" as const } },
       ],
     }
   );

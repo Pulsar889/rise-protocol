@@ -24,6 +24,11 @@ export const PDAS = {
   cdpConfig:           PublicKey.findProgramAddressSync([Buffer.from("cdp_config")],            PROGRAM_IDS.cdp)[0],
   cdpFeeVault:         PublicKey.findProgramAddressSync([Buffer.from("cdp_fee_vault")],         PROGRAM_IDS.cdp)[0],
   borrowRewardsConfig: PublicKey.findProgramAddressSync([Buffer.from("borrow_rewards_config")], PROGRAM_IDS.cdp)[0],
+  // SOL payment config — seeds: ["payment_config", SystemProgram.programId]
+  solPaymentConfig:    PublicKey.findProgramAddressSync(
+    [Buffer.from("payment_config"), new PublicKey("11111111111111111111111111111111").toBuffer()],
+    PROGRAM_IDS.cdp
+  )[0],
   governanceConfig:    PublicKey.findProgramAddressSync([Buffer.from("governance_config")],     PROGRAM_IDS.governance)[0],
   rewardsConfig:       PublicKey.findProgramAddressSync([Buffer.from("rewards_config")],        PROGRAM_IDS.rewards)[0],
 };

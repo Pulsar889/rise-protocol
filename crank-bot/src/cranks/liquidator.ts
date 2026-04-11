@@ -197,9 +197,13 @@ async function liquidatePosition(
     return;
   }
 
-  // Fetch pythPriceFeed from collateralConfig
-  const colConfig = await (client.cdp.account as any).collateralConfig.fetch(collateralConfig) as any;
-  const pythPriceFeed: PublicKey = colConfig.pythPriceFeed;
+  // Fetch pythPriceFeed from collateralConfig and solPriceFeed from solPaymentConfig
+  const [colConfig, solPaymentConfigData] = await Promise.all([
+    (client.cdp.account as any).collateralConfig.fetch(collateralConfig),
+    (client.cdp.account as any).paymentConfig.fetch(PDAS.solPaymentConfig),
+  ]);
+  const pythPriceFeed: PublicKey = (colConfig as any).pythPriceFeed;
+  const solPriceFeed:  PublicKey = (solPaymentConfigData as any).pythPriceFeed;
 
   // Get Jupiter route: collateral → WSOL
   const route = await getJupiterRoute(
@@ -256,8 +260,9 @@ async function liquidatePosition(
         poolVault:                PDAS.poolVault,
         wsolMint:                 WSOL_MINT,
         cdpWsolVault,
+        solPaymentConfig:         PDAS.solPaymentConfig,
         pythPriceFeed,
-        solPriceFeed:             new PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"),
+        solPriceFeed,
         tokenProgram:             TOKEN_PROGRAM_ID,
         systemProgram:            SystemProgram.programId,
         jupiterProgram:           JUPITER_PROGRAM_ID,
