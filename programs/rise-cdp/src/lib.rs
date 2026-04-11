@@ -223,4 +223,13 @@ pub mod rise_cdp {
     pub fn initialize_wsol_vaults(ctx: Context<InitializeWsolVaults>) -> Result<()> {
         instructions::initialize_wsol_vaults::handler(ctx)
     }
+
+    /// Authority-only: update the Pyth price feed and/or active flag on a payment config.
+    pub fn update_payment_config(
+        ctx: Context<UpdatePaymentConfig>,
+        pyth_price_feed: Option<Pubkey>,
+        active: Option<bool>,
+    ) -> Result<()> {
+        instructions::update_payment_config::handler(ctx, pyth_price_feed, active)
+    }
 }
