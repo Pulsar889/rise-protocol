@@ -93,4 +93,10 @@ pub mod rise_governance {
     ) -> Result<()> {
         instructions::migrate_governance_config::handler(ctx)
     }
+
+    /// Authority-only: close governance config and reclaim rent.
+    /// Used for devnet re-initialization (e.g., RISE mint correction).
+    pub fn close_governance_config(ctx: Context<CloseGovernanceConfig>) -> Result<()> {
+        instructions::close_governance_config::handler(ctx)
+    }
 }
