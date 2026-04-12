@@ -18,7 +18,7 @@ import * as path from "path";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const RPC        = "https://devnet.helius-rpc.com/?api-key=787be2ec-9299-40c2-af00-e559a4715fa1";
+const RPC        = "https://devnet.helius-rpc.com/?api-key=48e90e75-929f-420e-8b85-cb6ac585e2e6";
 const RISE_MINT  = new PublicKey("2TysJ9Tw5WLh7hBLmC6iZp73bm6akogYEushJEf8K49Q");
 
 const CDP_PROGRAM_ID     = new PublicKey("3snPJTuZP9XHNciH7Q5KZzsvk2doxpuoYqWXf8JofEPR");
@@ -31,6 +31,20 @@ const REWARDS_PROGRAM_ID = new PublicKey("8d3UidB3Ent4493deoozPYDC48XG2SRj7EdD7x
 const CDP_EPOCH_EMISSIONS  = BigInt("1142308000000"); // 1,142,308 RISE (6 decimals)
 const CDP_SLOTS_PER_EPOCH  = BigInt("604800");        // ~1 week
 const LP_EPOCH_EMISSIONS   = BigInt("1142308000000"); // 1,142,308 RISE (6 decimals)
+
+// LP gauge pool seeds — placeholder pubkeys derived from fixed seeds.
+// Replace with real Orca/Raydium pool addresses before mainnet.
+function makePlaceholder(seed: string): PublicKey {
+  const buf = Buffer.alloc(32, 0);
+  Buffer.from(seed).copy(buf);
+  return Keypair.fromSeed(buf).publicKey;
+}
+
+const GAUGE_POOLS: Record<string, PublicKey> = {
+  "riseSOL/SOL  (Orca)":    makePlaceholder("rise-pool-risesol-sol"),
+  "riseSOL/USDC (Orca)":    makePlaceholder("rise-pool-risesol-usdc"),
+  "RISE/SOL     (Raydium)": makePlaceholder("rise-pool-rise-sol"),
+};
 
 const KEYPAIR_PATH = process.env.ANCHOR_WALLET ?? `${process.env.HOME}/.config/solana/id.json`;
 
@@ -159,6 +173,42 @@ async function main() {
       })
       .rpc();
     console.log("[OK] initialize_rewards_vault:", sig5.slice(0, 20) + "...");
+  }
+
+  // ── 5. Close any existing gauges ─────────────────────────────────────────────
+  console.log("Closing any existing gauges...");
+  const existingGauges = await (rewards.account as any).gauge.all();
+  if (existingGauges.length === 0) {
+    console.log("  No existing gauges found.");
+  } else {
+    for (const { publicKey: gaugePda, account: gaugeAcc } of existingGauges) {
+      const sig = await rewards.methods
+        .closeGauge()
+        .accounts({ authority: payer.publicKey, config: rewardsConfig, gauge: gaugePda })
+        .rpc();
+      console.log(`  Closed gauge #${gaugeAcc.index} (${gaugePda.toBase58().slice(0, 12)}...): ${sig.slice(0, 20)}...`);
+    }
+  }
+
+  // ── 6. Recreate gauges ────────────────────────────────────────────────────────
+  console.log("Creating gauges...");
+  let gaugeIndex = 0;
+  for (const [label, pool] of Object.entries(GAUGE_POOLS)) {
+    const [gaugePda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("gauge"), pool.toBuffer()],
+      REWARDS_PROGRAM_ID,
+    );
+    const sig = await rewards.methods
+      .createGauge(pool)
+      .accounts({
+        authority:     payer.publicKey,
+        config:        rewardsConfig,
+        gauge:         gaugePda,
+        systemProgram: SystemProgram.programId,
+      })
+      .rpc();
+    console.log(`  Gauge #${gaugeIndex} — ${label}: ${sig.slice(0, 20)}...`);
+    gaugeIndex++;
   }
 
   console.log();
