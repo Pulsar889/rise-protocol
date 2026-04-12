@@ -35,8 +35,8 @@ pub enum CdpError {
     #[msg("Interest accrual is up to date")]
     InterestUpToDate,
 
-    #[msg("Repayment amount exceeds outstanding debt")]
-    RepaymentExceedsDebt,
+    #[msg("Insufficient riseSOL balance to cover outstanding debt")]
+    InsufficientRepaymentBalance,
 
     #[msg("The pool is currently paused")]
     PoolPaused,

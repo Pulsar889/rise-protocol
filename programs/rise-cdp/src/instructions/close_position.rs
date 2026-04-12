@@ -22,7 +22,7 @@ pub fn handler(ctx: Context<ClosePosition>) -> Result<()> {
     // Verify borrower is sending enough riseSOL to cover debt
     require!(
         ctx.accounts.borrower_rise_sol_account.amount >= total_owed,
-        CdpError::RepaymentExceedsDebt
+        CdpError::InsufficientRepaymentBalance
     );
 
     // --- Burn riseSOL from borrower ---

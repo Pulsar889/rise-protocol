@@ -47,7 +47,7 @@ pub fn handler(
     // ── Verify borrower holds enough riseSOL ────────────────────────────────────
     require!(
         ctx.accounts.borrower_rise_sol_account.amount >= cleared_rise_sol,
-        CdpError::RepaymentExceedsDebt
+        CdpError::InsufficientRepaymentBalance
     );
 
     // ── Clear interest first, then principal ─────────────────────────────────

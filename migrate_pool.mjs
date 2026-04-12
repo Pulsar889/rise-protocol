@@ -4,7 +4,7 @@ import { readFileSync } from "fs";
 import { homedir } from "os";
 import path from "path";
 
-const RPC = "https://devnet.helius-rpc.com/?api-key=787be2ec-9299-40c2-af00-e559a4715fa1";
+const RPC = "https://devnet.helius-rpc.com/?api-key=48e90e75-929f-420e-8b85-cb6ac585e2e6";
 const STAKING_PROGRAM_ID = new PublicKey("BnQc6jJMT6mt3mvWuQFAd9vf2T2wWkAYD2uGjCXud6Lo");
 
 // Load wallet

@@ -9,7 +9,7 @@ import { Connection, Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import * as fs from "fs";
 import * as path from "path";
 
-const RPC = "https://devnet.helius-rpc.com/?api-key=787be2ec-9299-40c2-af00-e559a4715fa1";
+const RPC = "https://devnet.helius-rpc.com/?api-key=48e90e75-929f-420e-8b85-cb6ac585e2e6";
 const CDP_PROGRAM_ID = new PublicKey("3snPJTuZP9XHNciH7Q5KZzsvk2doxpuoYqWXf8JofEPR");
 const RISE_SOL_MINT  = new PublicKey("86bHg3K32cRhnfcYTr3RCgKZme4xSLZzMyzWA8qDswHp");
 
