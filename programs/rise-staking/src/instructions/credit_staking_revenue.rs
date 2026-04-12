@@ -7,8 +7,16 @@ use crate::errors::StakingError;
 /// exchange rate so stakers benefit right away rather than waiting for the
 /// next update_exchange_rate epoch crank.
 ///
-/// Permissionless — integrity is guaranteed by the vault balance check.
-/// The SOL must already be in pool_vault before calling this.
+/// # Security model (I-3)
+///
+/// This instruction is **fully permissionless** — any account can call it with
+/// any `amount`, as long as the pool_vault already holds that many extra lamports.
+/// The vault balance check (`vault_balance >= accounted + amount`) is the only
+/// authorization gate. This is intentional: anyone who actually deposits SOL into
+/// the pool vault should be able to have that deposit recognised immediately. A
+/// malicious caller who does NOT first deposit SOL would fail the balance check,
+/// so the worst a bad actor can do is call it harmlessly after a legitimate deposit
+/// that the CDP program itself would have called anyway. There is no griefing risk.
 pub fn handler(ctx: Context<CreditStakingRevenue>, amount: u64) -> Result<()> {
     require!(amount > 0, StakingError::ZeroAmount);
 

@@ -324,7 +324,13 @@ impl CdpPosition {
         + 8   // excess_withdrawal_available_slot
         + 1;  // bump
 
-    /// Get total riseSOL owed (principal + interest)
+    /// Get total riseSOL owed (principal + interest).
+    ///
+    /// NOTE (L-6): Both fields are u64, so the sum can theoretically overflow a u64 if
+    /// interest_accrued grows large. `checked_add` returns None in that case and callers
+    /// convert it to `CdpError::MathOverflow`. In practice interest is bounded well
+    /// below u64::MAX by the collateral cap, but if unbounded accrual is ever possible
+    /// (e.g. very long-lived positions with high rates) consider widening to u128.
     pub fn total_rise_sol_owed(&self) -> Option<u64> {
         self.rise_sol_debt_principal.checked_add(self.interest_accrued)
     }

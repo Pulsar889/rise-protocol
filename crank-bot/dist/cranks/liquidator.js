@@ -122,9 +122,13 @@ async function liquidatePosition(client, positionPubkey, owner, collateralMint) 
         log.warn("liquidate: position has zero collateral, skipping", { position: positionPubkey.toBase58() });
         return;
     }
-    // Fetch pythPriceFeed from collateralConfig
-    const colConfig = await client.cdp.account.collateralConfig.fetch(collateralConfig);
+    // Fetch pythPriceFeed from collateralConfig and solPriceFeed from solPaymentConfig
+    const [colConfig, solPaymentConfigData] = await Promise.all([
+        client.cdp.account.collateralConfig.fetch(collateralConfig),
+        client.cdp.account.paymentConfig.fetch(client_1.PDAS.solPaymentConfig),
+    ]);
     const pythPriceFeed = colConfig.pythPriceFeed;
+    const solPriceFeed = solPaymentConfigData.pythPriceFeed;
     // Get Jupiter route: collateral → WSOL
     const route = await getJupiterRoute(collateralMint.toBase58(), WSOL_MINT.toBase58(), collateralAmount, slippageBps);
     if (!route) {
@@ -161,8 +165,9 @@ async function liquidatePosition(client, positionPubkey, owner, collateralMint) 
             poolVault: client_1.PDAS.poolVault,
             wsolMint: WSOL_MINT,
             cdpWsolVault,
+            solPaymentConfig: client_1.PDAS.solPaymentConfig,
             pythPriceFeed,
-            solPriceFeed: new web3_js_1.PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"),
+            solPriceFeed,
             tokenProgram: spl_token_1.TOKEN_PROGRAM_ID,
             systemProgram: web3_js_1.SystemProgram.programId,
             jupiterProgram: JUPITER_PROGRAM_ID,

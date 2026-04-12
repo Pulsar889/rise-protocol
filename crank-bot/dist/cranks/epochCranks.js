@@ -117,6 +117,7 @@ async function collectCdpFees(client) {
             .accounts({
             caller: client.wallet.publicKey,
             cdpFeeVault: client_1.PDAS.cdpFeeVault,
+            cdpConfig: client_1.PDAS.cdpConfig,
             treasury: client_1.PDAS.treasury,
             treasuryVault: client_1.PDAS.treasuryVault,
             globalPool: client_1.PDAS.globalPool,
@@ -130,11 +131,13 @@ async function collectCdpFees(client) {
 }
 // ── checkpoint_gauge (once per active gauge per epoch) ───────────────────────
 async function checkpointAllGauges(client) {
+    // Gauge discriminator: sha256("account:Gauge")[..8]
+    const GAUGE_DISC = Buffer.from([9, 19, 249, 189, 158, 171, 226, 205]);
     // Fetch all gauge accounts belonging to the rewards program
     const gaugeAccounts = await client.connection.getProgramAccounts(client_1.PROGRAM_IDS.rewards, {
         commitment: "confirmed",
         filters: [
-            { dataSize: 113 }, // Gauge account discriminator size — adjust if needed
+            { memcmp: { offset: 0, bytes: GAUGE_DISC.toString("base64"), encoding: "base64" } },
         ],
     });
     if (gaugeAccounts.length === 0) {

@@ -78,14 +78,14 @@ pub fn handler(ctx: Context<CollectCdpFees>) -> Result<()> {
         msg!("CDP fees → staking pool: {} lamports", staking_amount);
     }
 
-    // ── Transfer reserve share → treasury_vault ───────────────────────────────
+    // ── Transfer reserve share → reserve_vault ───────────────────────────────
     if reserve_amount > 0 {
         system_program::transfer(
             CpiContext::new_with_signer(
                 ctx.accounts.system_program.to_account_info(),
                 system_program::Transfer {
                     from: ctx.accounts.cdp_fee_vault.to_account_info(),
-                    to: ctx.accounts.treasury_vault.to_account_info(),
+                    to: ctx.accounts.reserve_vault.to_account_info(),
                 },
                 signer,
             ),
@@ -94,14 +94,14 @@ pub fn handler(ctx: Context<CollectCdpFees>) -> Result<()> {
         msg!("CDP fees → treasury reserve: {} lamports", reserve_amount);
     }
 
-    // ── Transfer veRISE share → treasury_vault ────────────────────────────────
+    // ── Transfer veRISE share → verise_vault ─────────────────────────────────
     if verise_amount > 0 {
         system_program::transfer(
             CpiContext::new_with_signer(
                 ctx.accounts.system_program.to_account_info(),
                 system_program::Transfer {
                     from: ctx.accounts.cdp_fee_vault.to_account_info(),
-                    to: ctx.accounts.treasury_vault.to_account_info(),
+                    to: ctx.accounts.verise_vault.to_account_info(),
                 },
                 signer,
             ),
@@ -170,14 +170,23 @@ pub struct CollectCdpFees<'info> {
     )]
     pub treasury: Account<'info, ProtocolTreasury>,
 
-    /// CHECK: Treasury SOL vault — receives reserve + veRISE shares.
+    /// CHECK: Protocol reserve vault — receives the reserve share.
     #[account(
         mut,
-        seeds = [b"treasury_vault"],
+        seeds = [b"reserve_vault"],
         seeds::program = rise_staking::ID,
         bump
     )]
-    pub treasury_vault: UncheckedAccount<'info>,
+    pub reserve_vault: UncheckedAccount<'info>,
+
+    /// CHECK: veRISE distribution vault — receives the veRISE holder share.
+    #[account(
+        mut,
+        seeds = [b"verise_vault"],
+        seeds::program = rise_staking::ID,
+        bump
+    )]
+    pub verise_vault: UncheckedAccount<'info>,
 
     /// GlobalPool from staking — updated by credit_staking_revenue CPI.
     #[account(

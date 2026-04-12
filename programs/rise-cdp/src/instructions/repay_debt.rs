@@ -292,6 +292,9 @@ pub fn handler(
 
     // ── Full repayment: return collateral, execute buyback if needed ──────────
     if is_fully_repaid {
+        // Guard against reentrancy through collateral-return and Jupiter buyback CPIs.
+        position.is_open = false;
+
         ctx.accounts.collateral_config.total_collateral_entitlements = ctx
             .accounts
             .collateral_config
@@ -374,7 +377,6 @@ pub fn handler(
             return Err(error!(CdpError::CollateralShortfall));
         }
 
-        position.is_open = false;
         msg!(
             "Position fully repaid and closed. Collateral returned: {} (shortfall: {})",
             available_collateral,

@@ -11,6 +11,8 @@ pub fn handler(ctx: Context<ClosePosition>) -> Result<()> {
     let config_mint = ctx.accounts.collateral_config.mint;
 
     require!(position.is_open, CdpError::PositionClosed);
+    // Guard against reentrancy through downstream CPIs (mirrors liquidate.rs pattern).
+    position.is_open = false;
 
     // Calculate total riseSOL owed
     let total_owed = position
@@ -110,8 +112,7 @@ pub fn handler(ctx: Context<ClosePosition>) -> Result<()> {
     );
     token::transfer(cpi_ctx, position.collateral_amount_original)?;
 
-    // --- Close position ---
-    position.is_open = false;
+    // --- Zero out position state ---
     position.rise_sol_debt_principal = 0;
     position.interest_accrued = 0;
 

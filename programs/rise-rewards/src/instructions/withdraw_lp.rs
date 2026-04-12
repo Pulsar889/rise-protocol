@@ -44,6 +44,14 @@ pub fn handler(ctx: Context<WithdrawLp>, amount: u64) -> Result<()> {
         .checked_sub(amount)
         .ok_or(RewardsError::MathOverflow)?;
 
+    // Prevent dust positions: after a partial withdrawal the remaining stake must
+    // be either fully emptied or at least the 1 000-token minimum to stay economically
+    // viable (matches the deposit_lp minimum symmetrically).
+    require!(
+        stake.lp_amount == 0 || stake.lp_amount >= 1_000,
+        RewardsError::ZeroAmount
+    );
+
     stake.reward_debt = (stake.lp_amount as u128)
         .checked_mul(gauge.reward_per_token)
         .ok_or(RewardsError::MathOverflow)?

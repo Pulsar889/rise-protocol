@@ -38,15 +38,15 @@ pub fn handler(ctx: Context<ClaimRevenueShare>) -> Result<()> {
 
     require!(claimable > 0, GovernanceError::NoRewardsToClaim);
 
-    // Transfer SOL from treasury vault to user
-    let vault_bump = ctx.bumps.treasury_vault;
-    let seeds = &[b"treasury_vault".as_ref(), &[vault_bump]];
+    // Transfer SOL from verise_vault to user
+    let vault_bump = ctx.bumps.verise_vault;
+    let seeds = &[b"verise_vault".as_ref(), &[vault_bump]];
     let signer = &[&seeds[..]];
 
     let cpi_ctx = CpiContext::new_with_signer(
         ctx.accounts.system_program.to_account_info(),
         system_program::Transfer {
-            from: ctx.accounts.treasury_vault.to_account_info(),
+            from: ctx.accounts.verise_vault.to_account_info(),
             to: ctx.accounts.user.to_account_info(),
         },
         signer,
@@ -94,11 +94,11 @@ pub struct ClaimRevenueShare<'info> {
     /// CHECK: Treasury SOL vault — PDA from staking program, bump derived by Anchor.
     #[account(
         mut,
-        seeds = [b"treasury_vault"],
+        seeds = [b"verise_vault"],
         bump,
         seeds::program = rise_staking::ID
     )]
-    pub treasury_vault: UncheckedAccount<'info>,
+    pub verise_vault: UncheckedAccount<'info>,
 
     pub system_program: Program<'info, System>,
 }

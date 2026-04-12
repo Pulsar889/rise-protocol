@@ -2,11 +2,12 @@
 /**
  * Rise Protocol Crank Bot
  *
- * Runs four independent loops:
+ * Runs five independent loops:
  *   - Epoch cranks       (update_exchange_rate, collect_fees, collect_cdp_fees, checkpoint_gauges)
  *   - Reward cranks      (checkpoint_borrow_rewards, checkpoint_stake_rewards)
  *   - Liquidation monitor (accrue_interest + liquidate for unhealthy positions)
  *   - Governance monitor  (execute_proposal for passed + timelocked proposals)
+ *   - Unstake claimer    (claim_unstake for all matured WithdrawalTickets)
  *
  * Configuration via environment variables — see .env.example.
  */
@@ -51,12 +52,14 @@ const epochCranks_1 = require("./cranks/epochCranks");
 const rewardCranks_1 = require("./cranks/rewardCranks");
 const liquidator_1 = require("./cranks/liquidator");
 const governance_1 = require("./cranks/governance");
+const unstakeClaimer_1 = require("./cranks/unstakeClaimer");
 const logger_1 = require("./logger");
 const log = (0, logger_1.makeLogger)("main");
 const EPOCH_CRANK_INTERVAL_MS = Number(process.env.EPOCH_CRANK_INTERVAL_MS ?? 5 * 60 * 1000); // 5 min
 const REWARD_CRANK_INTERVAL_MS = Number(process.env.REWARD_CRANK_INTERVAL_MS ?? 10 * 60 * 1000); // 10 min
 const LIQUIDATION_POLL_INTERVAL_MS = Number(process.env.LIQUIDATION_POLL_INTERVAL_MS ?? 30 * 1000); // 30 sec
 const GOVERNANCE_POLL_INTERVAL_MS = Number(process.env.GOVERNANCE_POLL_INTERVAL_MS ?? 5 * 60 * 1000); // 5 min
+const UNSTAKE_CLAIMER_INTERVAL_MS = Number(process.env.UNSTAKE_CLAIMER_INTERVAL_MS ?? 10 * 60 * 1000); // 10 min
 // ── Loop runner ───────────────────────────────────────────────────────────────
 /**
  * Runs `fn` immediately, then repeats every `intervalMs`.
@@ -85,6 +88,7 @@ async function main() {
         rewardCrankIntervalMs: REWARD_CRANK_INTERVAL_MS,
         liquidationPollIntervalMs: LIQUIDATION_POLL_INTERVAL_MS,
         governancePollIntervalMs: GOVERNANCE_POLL_INTERVAL_MS,
+        unstakeClaimerIntervalMs: UNSTAKE_CLAIMER_INTERVAL_MS,
     });
     const client = (0, client_1.createClient)();
     log.info("client ready", { wallet: client.wallet.publicKey.toBase58() });
@@ -100,6 +104,7 @@ async function main() {
         runLoop("reward_cranks", REWARD_CRANK_INTERVAL_MS, () => (0, rewardCranks_1.runRewardCranks)(client)),
         runLoop("liquidation_monitor", LIQUIDATION_POLL_INTERVAL_MS, () => (0, liquidator_1.runLiquidationMonitor)(client)),
         runLoop("governance_monitor", GOVERNANCE_POLL_INTERVAL_MS, () => (0, governance_1.runGovernanceMonitor)(client)),
+        runLoop("unstake_claimer", UNSTAKE_CLAIMER_INTERVAL_MS, () => (0, unstakeClaimer_1.runUnstakeClaimer)(client)),
     ]);
 }
 main().catch(err => {

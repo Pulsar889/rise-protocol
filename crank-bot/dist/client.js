@@ -59,6 +59,8 @@ exports.PDAS = {
     cdpConfig: web3_js_1.PublicKey.findProgramAddressSync([Buffer.from("cdp_config")], exports.PROGRAM_IDS.cdp)[0],
     cdpFeeVault: web3_js_1.PublicKey.findProgramAddressSync([Buffer.from("cdp_fee_vault")], exports.PROGRAM_IDS.cdp)[0],
     borrowRewardsConfig: web3_js_1.PublicKey.findProgramAddressSync([Buffer.from("borrow_rewards_config")], exports.PROGRAM_IDS.cdp)[0],
+    // SOL payment config — seeds: ["payment_config", SystemProgram.programId]
+    solPaymentConfig: web3_js_1.PublicKey.findProgramAddressSync([Buffer.from("payment_config"), new web3_js_1.PublicKey("11111111111111111111111111111111").toBuffer()], exports.PROGRAM_IDS.cdp)[0],
     governanceConfig: web3_js_1.PublicKey.findProgramAddressSync([Buffer.from("governance_config")], exports.PROGRAM_IDS.governance)[0],
     rewardsConfig: web3_js_1.PublicKey.findProgramAddressSync([Buffer.from("rewards_config")], exports.PROGRAM_IDS.rewards)[0],
 };

@@ -3,7 +3,7 @@ use anchor_lang::system_program;
 use crate::state::ProtocolTreasury;
 use crate::errors::StakingError;
 
-/// Authority-only: withdraw accumulated reserve SOL from treasury_vault to any destination.
+/// Authority-only: withdraw accumulated reserve SOL from reserve_vault to any destination.
 pub fn handler(ctx: Context<WithdrawReserve>, amount: u64) -> Result<()> {
     require!(amount > 0, StakingError::ZeroAmount);
     require!(
@@ -13,18 +13,18 @@ pub fn handler(ctx: Context<WithdrawReserve>, amount: u64) -> Result<()> {
 
     // Leave rent-exemption in the vault so the account stays alive.
     let rent_floor = Rent::get()?.minimum_balance(0);
-    let available = ctx.accounts.treasury_vault.lamports().saturating_sub(rent_floor);
+    let available = ctx.accounts.reserve_vault.lamports().saturating_sub(rent_floor);
     require!(available >= amount, StakingError::InsufficientLiquidity);
 
-    let vault_bump = ctx.bumps.treasury_vault;
-    let seeds = &[b"treasury_vault".as_ref(), &[vault_bump]];
+    let vault_bump = ctx.bumps.reserve_vault;
+    let seeds = &[b"reserve_vault".as_ref(), &[vault_bump]];
     let signer = &[&seeds[..]];
 
     system_program::transfer(
         CpiContext::new_with_signer(
             ctx.accounts.system_program.to_account_info(),
             system_program::Transfer {
-                from: ctx.accounts.treasury_vault.to_account_info(),
+                from: ctx.accounts.reserve_vault.to_account_info(),
                 to:   ctx.accounts.destination.to_account_info(),
             },
             signer,
@@ -58,10 +58,10 @@ pub struct WithdrawReserve<'info> {
     /// CHECK: PDA verified by seeds; holds native SOL.
     #[account(
         mut,
-        seeds = [b"treasury_vault"],
+        seeds = [b"reserve_vault"],
         bump
     )]
-    pub treasury_vault: UncheckedAccount<'info>,
+    pub reserve_vault: UncheckedAccount<'info>,
 
     /// CHECK: Destination wallet — authority decides where the funds go.
     #[account(mut)]

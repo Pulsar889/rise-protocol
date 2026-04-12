@@ -10,7 +10,7 @@ use crate::errors::StakingError;
 /// the seized tokens back. Since riseSOL repayment burns tokens rather than producing SOL,
 /// the treasury covers the buyback cost.
 ///
-/// Transfers `shortfall_sol` lamports from `treasury_vault` to `cdp_wsol_buyback_vault`
+/// Transfers `shortfall_sol` lamports from `reserve_vault` to `cdp_wsol_buyback_vault`
 /// (a WSOL token account on the CDP side). The CDP program then calls `sync_native` and
 /// invokes Jupiter to swap WSOL → collateral tokens → borrower.
 ///
@@ -20,18 +20,18 @@ pub fn handler(ctx: Context<WithdrawTreasuryForCdpBuyback>, shortfall_sol: u64) 
 
     // Leave at least rent-exemption in the treasury vault.
     let rent_floor = Rent::get()?.minimum_balance(0);
-    let available = ctx.accounts.treasury_vault.lamports().saturating_sub(rent_floor);
+    let available = ctx.accounts.reserve_vault.lamports().saturating_sub(rent_floor);
     require!(available >= shortfall_sol, StakingError::InsufficientLiquidity);
 
-    let vault_bump = ctx.bumps.treasury_vault;
-    let seeds = &[b"treasury_vault".as_ref(), &[vault_bump]];
+    let vault_bump = ctx.bumps.reserve_vault;
+    let seeds = &[b"reserve_vault".as_ref(), &[vault_bump]];
     let signer = &[&seeds[..]];
 
     system_program::transfer(
         CpiContext::new_with_signer(
             ctx.accounts.system_program.to_account_info(),
             system_program::Transfer {
-                from: ctx.accounts.treasury_vault.to_account_info(),
+                from: ctx.accounts.reserve_vault.to_account_info(),
                 to:   ctx.accounts.cdp_wsol_buyback_vault.to_account_info(),
             },
             signer,
@@ -71,10 +71,10 @@ pub struct WithdrawTreasuryForCdpBuyback<'info> {
     /// CHECK: PDA verified by seeds; holds native SOL.
     #[account(
         mut,
-        seeds = [b"treasury_vault"],
+        seeds = [b"reserve_vault"],
         bump
     )]
-    pub treasury_vault: UncheckedAccount<'info>,
+    pub reserve_vault: UncheckedAccount<'info>,
 
     /// CHECK: CDP WSOL buyback vault — receives lamports for Jupiter WSOL wrapping.
     #[account(mut)]

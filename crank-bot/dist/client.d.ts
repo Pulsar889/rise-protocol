@@ -16,6 +16,7 @@ export declare const PDAS: {
     cdpConfig: anchor.web3.PublicKey;
     cdpFeeVault: anchor.web3.PublicKey;
     borrowRewardsConfig: anchor.web3.PublicKey;
+    solPaymentConfig: anchor.web3.PublicKey;
     governanceConfig: anchor.web3.PublicKey;
     rewardsConfig: anchor.web3.PublicKey;
 };

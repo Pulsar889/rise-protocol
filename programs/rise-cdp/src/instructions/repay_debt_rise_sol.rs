@@ -17,7 +17,7 @@ use rise_staking::program::RiseStaking;
 ///
 /// Shortfall buyback: if collateral was previously seized (via redeem_collateral_for_liquidity),
 /// the protocol treasury funds the buyback. The staking program transfers `shortfall_sol` from
-/// treasury_vault → cdp_wsol_buyback_vault, which is then wrapped as WSOL and swapped via
+/// reserve_vault → cdp_wsol_buyback_vault, which is then wrapped as WSOL and swapped via
 /// Jupiter → collateral tokens → borrower. Pass empty bytes / 0 for shortfall params in
 /// the common case (no shortfall expected).
 pub fn handler(
@@ -124,6 +124,9 @@ pub fn handler(
         position.interest_accrued == 0 && position.rise_sol_debt_principal == 0;
 
     if is_fully_repaid {
+        // Guard against reentrancy through collateral-return and Jupiter buyback CPIs.
+        position.is_open = false;
+
         ctx.accounts.collateral_config.total_collateral_entitlements = ctx
             .accounts
             .collateral_config
@@ -173,7 +176,7 @@ pub fn handler(
                 let bump = ctx.accounts.cdp_config.bump;
                 let signer_seeds: &[&[&[u8]]] = &[&[b"cdp_config", &[bump]]];
 
-                // CPI: treasury_vault → cdp_wsol_buyback_vault (native SOL transfer)
+                // CPI: reserve_vault → cdp_wsol_buyback_vault (native SOL transfer)
                 rise_staking::cpi::withdraw_treasury_for_cdp_buyback(
                     CpiContext::new_with_signer(
                         ctx.accounts.staking_program.to_account_info(),
@@ -181,7 +184,7 @@ pub fn handler(
                             cdp_config:             ctx.accounts.cdp_config.to_account_info(),
                             global_pool:            ctx.accounts.global_pool.to_account_info(),
                             treasury:               ctx.accounts.treasury.to_account_info(),
-                            treasury_vault:         ctx.accounts.treasury_vault.to_account_info(),
+                            reserve_vault:          ctx.accounts.reserve_vault.to_account_info(),
                             cdp_wsol_buyback_vault: ctx.accounts.cdp_wsol_buyback_vault.to_account_info(),
                             system_program:         ctx.accounts.system_program.to_account_info(),
                         },
@@ -243,7 +246,6 @@ pub fn handler(
             );
         }
 
-        position.is_open = false;
         msg!(
             "Position fully repaid (riseSOL) and closed. Collateral returned: {} (shortfall: {})",
             available,
@@ -342,15 +344,15 @@ pub struct RepayDebtRiseSol<'info> {
     )]
     pub treasury: Box<Account<'info, rise_staking::state::ProtocolTreasury>>,
 
-    /// Protocol treasury SOL vault — source of buyback funds (shortfall path only).
+    /// Protocol reserve vault — source of buyback funds (shortfall path only).
     /// CHECK: PDA verified by seeds on the staking program.
     #[account(
         mut,
-        seeds = [b"treasury_vault"],
+        seeds = [b"reserve_vault"],
         seeds::program = rise_staking::ID,
         bump
     )]
-    pub treasury_vault: UncheckedAccount<'info>,
+    pub reserve_vault: UncheckedAccount<'info>,
 
     /// Staking pool SOL vault — receives residual WSOL swept from buyback vault after swap.
     /// CHECK: PDA verified by seeds on the staking program.

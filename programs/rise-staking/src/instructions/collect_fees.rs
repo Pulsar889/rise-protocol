@@ -23,8 +23,9 @@ pub fn handler(ctx: Context<CollectFees>) -> Result<()> {
         .ok_or(StakingError::MathOverflow)?;
 
     if sweepable == 0 {
+        // L-1: do NOT advance last_collection_epoch here — fees may arrive later
+        // in the same epoch and a premature update would block a second collect call.
         msg!("No fees to collect this epoch");
-        ctx.accounts.treasury.last_collection_epoch = current_epoch;
         return Ok(());
     }
 
@@ -72,13 +73,13 @@ pub fn handler(ctx: Context<CollectFees>) -> Result<()> {
         msg!("Team cut sent: {} lamports", team_amount);
     }
 
-    // Transfer reserve to treasury vault
+    // Transfer reserve → reserve_vault
     if reserve_amount > 0 {
         let cpi_ctx = CpiContext::new_with_signer(
             ctx.accounts.system_program.to_account_info(),
             system_program::Transfer {
                 from: ctx.accounts.pool_vault.to_account_info(),
-                to: ctx.accounts.treasury_vault.to_account_info(),
+                to: ctx.accounts.reserve_vault.to_account_info(),
             },
             signer,
         );
@@ -92,13 +93,13 @@ pub fn handler(ctx: Context<CollectFees>) -> Result<()> {
         msg!("Treasury reserve received: {} lamports", reserve_amount);
     }
 
-    // Transfer veRISE share to treasury vault and update revenue index
+    // Transfer veRISE share → verise_vault and update revenue index
     if verise_amount > 0 {
         let cpi_ctx = CpiContext::new_with_signer(
             ctx.accounts.system_program.to_account_info(),
             system_program::Transfer {
                 from: ctx.accounts.pool_vault.to_account_info(),
-                to: ctx.accounts.treasury_vault.to_account_info(),
+                to: ctx.accounts.verise_vault.to_account_info(),
             },
             signer,
         );
@@ -155,13 +156,21 @@ pub struct CollectFees<'info> {
     )]
     pub pool_vault: UncheckedAccount<'info>,
 
-    /// CHECK: Treasury SOL vault.
+    /// CHECK: Protocol reserve vault — receives the reserve share.
     #[account(
         mut,
-        seeds = [b"treasury_vault"],
+        seeds = [b"reserve_vault"],
         bump
     )]
-    pub treasury_vault: UncheckedAccount<'info>,
+    pub reserve_vault: UncheckedAccount<'info>,
+
+    /// CHECK: veRISE distribution vault — receives the veRISE holder share.
+    #[account(
+        mut,
+        seeds = [b"verise_vault"],
+        bump
+    )]
+    pub verise_vault: UncheckedAccount<'info>,
 
     /// CHECK: Team salary wallet.
     #[account(

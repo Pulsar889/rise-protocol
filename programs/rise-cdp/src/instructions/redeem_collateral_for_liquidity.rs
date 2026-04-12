@@ -28,6 +28,12 @@ pub fn handler(
 ) -> Result<()> {
     require!(amount > 0, CdpError::ZeroAmount);
 
+    // NOTE (I-2): There is intentionally no `collateral_config.active` check here.
+    // This function is a liquidity backstop — it must remain callable even when a
+    // collateral type is being deprecated, because withdrawal tickets already queued
+    // from that collateral still need to be honoured. Blocking backstop calls on an
+    // inactive collateral would leave stakers unable to redeem.
+
     // ── Condition check — only callable during a genuine liquidity shortfall ──
     let pool = &ctx.accounts.global_pool;
     require!(

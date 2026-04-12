@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
-use crate::state::{StakeRewardsConfig, UserStakeRewards, GlobalPool};
+use crate::state::{StakeRewardsConfig, UserStakeRewards};
 use crate::errors::StakingError;
 
 /// Claim accumulated RISE staking rewards.
@@ -9,7 +9,6 @@ use crate::errors::StakingError;
 /// the full pending balance from the rewards vault to the staker's RISE ATA.
 pub fn handler(ctx: Context<ClaimStakeRewards>) -> Result<()> {
     let reward_per_token = ctx.accounts.stake_rewards_config.reward_per_token;
-    let current_amount = ctx.accounts.user_rise_sol_account.amount;
 
     let rewards = &mut ctx.accounts.user_stake_rewards;
 
@@ -41,8 +40,10 @@ pub fn handler(ctx: Context<ClaimStakeRewards>) -> Result<()> {
         .checked_add(total_claimable)
         .ok_or(StakingError::MathOverflow)?;
 
-    // Re-sync reward_debt to the current riseSOL balance.
-    rewards.sync_debt(reward_per_token, current_amount)?;
+    // Re-sync reward_debt to the staking-tracked riseSOL amount (not the live token
+    // balance, which could diverge if tokens were transferred outside the staking program).
+    let tracked_amount = rewards.rise_sol_amount;
+    rewards.sync_debt(reward_per_token, tracked_amount)?;
 
     msg!("Claimed {} RISE staking rewards", total_claimable);
     msg!("Lifetime claimed: {}", rewards.total_claimed);
@@ -54,12 +55,6 @@ pub fn handler(ctx: Context<ClaimStakeRewards>) -> Result<()> {
 pub struct ClaimStakeRewards<'info> {
     #[account(mut)]
     pub user: Signer<'info>,
-
-    #[account(
-        seeds = [b"global_pool"],
-        bump = pool.bump
-    )]
-    pub pool: Box<Account<'info, GlobalPool>>,
 
     #[account(
         seeds = [b"stake_rewards_config"],
@@ -74,13 +69,6 @@ pub struct ClaimStakeRewards<'info> {
         constraint = user_stake_rewards.owner == user.key() @ StakingError::Unauthorized,
     )]
     pub user_stake_rewards: Box<Account<'info, UserStakeRewards>>,
-
-    /// riseSOL ATA — read to sync reward_debt after claim.
-    #[account(
-        constraint = user_rise_sol_account.mint == pool.rise_sol_mint @ StakingError::Unauthorized,
-        constraint = user_rise_sol_account.owner == user.key() @ StakingError::Unauthorized,
-    )]
-    pub user_rise_sol_account: Box<Account<'info, TokenAccount>>,
 
     #[account(
         mut,
