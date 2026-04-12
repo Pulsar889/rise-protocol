@@ -11,7 +11,8 @@ export declare const PDAS: {
     globalPool: anchor.web3.PublicKey;
     poolVault: anchor.web3.PublicKey;
     treasury: anchor.web3.PublicKey;
-    treasuryVault: anchor.web3.PublicKey;
+    reserveVault: anchor.web3.PublicKey;
+    veriseVault: anchor.web3.PublicKey;
     stakeRewardsConfig: anchor.web3.PublicKey;
     cdpConfig: anchor.web3.PublicKey;
     cdpFeeVault: anchor.web3.PublicKey;

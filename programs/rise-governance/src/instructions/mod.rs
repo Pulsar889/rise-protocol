@@ -12,6 +12,7 @@ pub mod update_governance_config;
 pub mod close_proposal;
 pub mod migrate_governance_config;
 pub mod close_governance_config;
+pub mod close_rise_vault;
 
 pub use initialize_governance::*;
 pub use initialize_rise_vault::*;
@@ -27,3 +28,4 @@ pub use update_governance_config::*;
 pub use close_proposal::*;
 pub use migrate_governance_config::*;
 pub use close_governance_config::*;
+pub use close_rise_vault::*;

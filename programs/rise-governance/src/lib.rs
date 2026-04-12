@@ -99,4 +99,10 @@ pub mod rise_governance {
     pub fn close_governance_config(ctx: Context<CloseGovernanceConfig>) -> Result<()> {
         instructions::close_governance_config::handler(ctx)
     }
+
+    /// Authority-only: burn any tokens in rise_vault (wrong mint), close it,
+    /// and reclaim rent.  Used for devnet re-initialization.
+    pub fn close_rise_vault(ctx: Context<CloseRiseVault>) -> Result<()> {
+        instructions::close_rise_vault::handler(ctx)
+    }
 }

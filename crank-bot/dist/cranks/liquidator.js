@@ -24,17 +24,12 @@ const WSOL_MINT = new web3_js_1.PublicKey("So11111111111111111111111111111111111
 const JUPITER_EVENT_AUTHORITY = web3_js_1.PublicKey.findProgramAddressSync([Buffer.from("__event_authority")], JUPITER_PROGRAM_ID)[0];
 // CdpPosition account discriminator bytes (sha256("account:CdpPosition")[..8])
 const CDP_POSITION_DISC = Buffer.from([64, 254, 135, 230, 41, 129, 38, 9]);
-// Byte offset of the `is_open: bool` field within CdpPosition
+// Byte offset of the `is_open: bool` field within CdpPosition — used only for
+// the getProgramAccounts memcmp filter to pre-select open positions server-side.
 // disc(8) + owner(32) + collateralMint(32) + collateralAmountOriginal(8) +
 // collateralUsdValue(16) + riseSolDebtPrincipal(8) + interestAccrued(8) +
 // lastAccrualSlot(8) + healthFactor(16) + openedAtSlot(8) + nonce(1) = 145
 const IS_OPEN_OFFSET = 145;
-// health_factor field offset: disc(8)+owner(32)+collMint(32)+collAmt(8)+collUsd(16)+debt(8)+interest(8)+lastSlot(8) = 120
-const HEALTH_FACTOR_OFFSET = 120;
-// collateralMint field offset: disc(8) + owner(32) = 40
-const COLLATERAL_MINT_OFFSET = 40;
-// owner field offset: disc(8)
-const OWNER_OFFSET = 8;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function deriveCdpWsolVault() {
     return web3_js_1.PublicKey.findProgramAddressSync([Buffer.from("cdp_wsol_vault")], client_1.PROGRAM_IDS.cdp)[0];
@@ -138,8 +133,6 @@ async function liquidatePosition(client, positionPubkey, owner, collateralMint) 
         });
         return;
     }
-    // Ensure caller has an ATA for the collateral token (to receive trigger fee)
-    const callerCollateralAccount = await (0, spl_token_1.getOrCreateAssociatedTokenAccount)(client.connection, client.wallet.payer, collateralMint, client.wallet.publicKey);
     // Borrower's collateral ATA (receives excess collateral; may or may not exist)
     const borrowerCollateralAccount = (0, spl_token_1.getAssociatedTokenAddressSync)(collateralMint, owner);
     log.info("liquidate: executing", {
@@ -157,7 +150,6 @@ async function liquidatePosition(client, positionPubkey, owner, collateralMint) 
             collateralConfig,
             collateralMint,
             collateralVault,
-            callerCollateralAccount: callerCollateralAccount.address,
             borrowerCollateralAccount,
             globalPool: client_1.PDAS.globalPool,
             cdpConfig: client_1.PDAS.cdpConfig,
@@ -207,10 +199,9 @@ async function runLiquidationMonitor(client) {
     log.info("liquidation monitor: found open positions", { count: positionAccounts.length });
     let checked = 0, liquidated = 0, skipped = 0;
     for (const { pubkey: positionPubkey, account } of positionAccounts) {
-        const data = account.data;
-        // Read health_factor (u128 little-endian, 16 bytes) at offset 120
-        const hfBytes = data.slice(HEALTH_FACTOR_OFFSET, HEALTH_FACTOR_OFFSET + 16);
-        const healthFactor = hfBytes.readBigUInt64LE(0) + (hfBytes.readBigUInt64LE(8) << BigInt(64));
+        // Use IDL-based deserialization rather than brittle raw byte-offset reads.
+        const decoded = client.cdp.coder.accounts.decode("CdpPosition", account.data);
+        const healthFactor = BigInt(decoded.healthFactor.toString());
         checked++;
         if (healthFactor >= hfThreshold) {
             log.debug("liquidation monitor: position healthy", {
@@ -219,9 +210,8 @@ async function runLiquidationMonitor(client) {
             });
             continue;
         }
-        // Read owner (pubkey, 32 bytes at offset 8)
-        const owner = new web3_js_1.PublicKey(data.slice(OWNER_OFFSET, OWNER_OFFSET + 32));
-        const collateralMint = new web3_js_1.PublicKey(data.slice(COLLATERAL_MINT_OFFSET, COLLATERAL_MINT_OFFSET + 32));
+        const owner = decoded.owner;
+        const collateralMint = decoded.collateralMint;
         log.warn("liquidation monitor: UNHEALTHY position found", {
             position: positionPubkey.toBase58(),
             owner: owner.toBase58(),
