@@ -9,14 +9,32 @@ pub fn handler(
 ) -> Result<()> {
     let current_slot = Clock::get()?.slot;
     let config = &mut ctx.accounts.config;
-    let lock = &ctx.accounts.lock;
 
-    // Check proposer has enough veRISE
-    let current_verise = lock.current_verise(current_slot);
-    require!(
-        current_verise >= config.proposal_threshold,
-        GovernanceError::InsufficientVeRise
-    );
+    // Sum current_verise across ALL provided locks.
+    // Each lock is passed via remaining_accounts and validated manually:
+    //   1. Account must be owned by this program
+    //   2. Deserialise as VeLock (skip 8-byte Anchor discriminator)
+    //   3. lock.owner must match the proposer
+    //   4. PDA re-derivation must match the account key (prevents spoofed accounts)
+    require!(!ctx.remaining_accounts.is_empty(), GovernanceError::InsufficientVeRise);
+
+    let mut total_verise: u64 = 0;
+    for acc in ctx.remaining_accounts.iter() {
+        require!(acc.owner == ctx.program_id, GovernanceError::InvalidConfig);
+        let data = acc.try_borrow_data()?;
+        require!(data.len() >= VeLock::SIZE, GovernanceError::InvalidConfig);
+        let lock: VeLock = AnchorDeserialize::deserialize(&mut &data[8..])?;
+        require!(lock.owner == ctx.accounts.proposer.key(), GovernanceError::Unauthorized);
+        // Verify this is a genuine VeLock PDA — not a spoofed account
+        let expected = Pubkey::create_program_address(
+            &[b"ve_lock", ctx.accounts.proposer.key().as_ref(), &[lock.nonce], &[lock.bump]],
+            ctx.program_id,
+        ).map_err(|_| error!(GovernanceError::InvalidConfig))?;
+        require!(expected == *acc.key, GovernanceError::InvalidConfig);
+        total_verise = total_verise.saturating_add(lock.current_verise(current_slot));
+    }
+
+    require!(total_verise >= config.proposal_threshold, GovernanceError::InsufficientVeRise);
 
     // Enforce active proposal cap
     require!(
@@ -56,7 +74,7 @@ pub fn handler(
     msg!("Proposal #{} created", proposal.index);
     msg!("Voting ends at slot: {}", proposal.voting_end_slot);
     msg!("Executable at slot: {}", proposal.execution_slot);
-    msg!("Proposer veRISE: {}", current_verise);
+    msg!("Total proposer veRISE: {}", total_verise);
 
     Ok(())
 }
@@ -72,13 +90,6 @@ pub struct CreateProposal<'info> {
         bump = config.bump
     )]
     pub config: Account<'info, GovernanceConfig>,
-
-    #[account(
-        seeds = [b"ve_lock", proposer.key().as_ref(), &[lock.nonce]],
-        bump = lock.bump,
-        constraint = lock.owner == proposer.key()
-    )]
-    pub lock: Account<'info, VeLock>,
 
     #[account(
         init,

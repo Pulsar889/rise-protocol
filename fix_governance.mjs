@@ -35,7 +35,7 @@ const GOV_PROGRAM_ID = new PublicKey("CtMKhgY5xKiwLB5jmQ44PRF9QsUqXqSbiyVbFsidsk
 const REAL_RISE_MINT = new PublicKey("2TysJ9Tw5WLh7hBLmC6iZp73bm6akogYEushJEf8K49Q");
 
 // Governance init params (same as original setup)
-const PROPOSAL_THRESHOLD = new BN("100000000000"); // 100,000 RISE (6 decimals)
+const PROPOSAL_THRESHOLD = new BN("10000000000"); // 10,000 RISE (6 decimals)
 const QUORUM_BPS         = 500; // 5%
 
 const DRY_RUN = !process.argv.includes("--exec");
