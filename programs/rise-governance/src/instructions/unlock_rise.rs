@@ -41,8 +41,10 @@ pub fn handler(ctx: Context<UnlockRise>) -> Result<()> {
     )?;
 
     // ── Return RISE from vault to user ───────────────────────────────────────
-    let vault_bump = ctx.bumps.rise_vault;
-    let seeds = &[b"rise_vault".as_ref(), &[vault_bump]];
+    // The vault's token authority is the governance_config PDA (set at init),
+    // so we sign with config seeds, not rise_vault seeds.
+    let config_bump = ctx.accounts.config.bump;
+    let seeds = &[b"governance_config".as_ref(), &[config_bump]];
     let signer = &[&seeds[..]];
 
     token::transfer(
@@ -51,7 +53,7 @@ pub fn handler(ctx: Context<UnlockRise>) -> Result<()> {
             token::Transfer {
                 from: ctx.accounts.rise_vault.to_account_info(),
                 to: ctx.accounts.user_rise_account.to_account_info(),
-                authority: ctx.accounts.rise_vault.to_account_info(),
+                authority: ctx.accounts.config.to_account_info(),
             },
             signer,
         ),
