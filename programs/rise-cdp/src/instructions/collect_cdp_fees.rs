@@ -123,6 +123,7 @@ pub fn handler(ctx: Context<CollectCdpFees>) -> Result<()> {
                 cdp_config: ctx.accounts.cdp_config.to_account_info(),
                 global_pool: ctx.accounts.global_pool.to_account_info(),
                 treasury: ctx.accounts.treasury.to_account_info(),
+                governance_config: ctx.accounts.governance_config.to_account_info(),
             },
             cdp_config_signer,
         ),
@@ -205,6 +206,10 @@ pub struct CollectCdpFees<'info> {
         bump
     )]
     pub pool_vault: UncheckedAccount<'info>,
+
+    /// CHECK: GovernanceConfig PDA — passed through to register_external_revenue CPI.
+    /// Owner validated by the staking program inside that instruction.
+    pub governance_config: UncheckedAccount<'info>,
 
     pub staking_program: Program<'info, RiseStaking>,
     pub system_program: Program<'info, System>,

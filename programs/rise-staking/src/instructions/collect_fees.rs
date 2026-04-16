@@ -38,12 +38,7 @@ pub fn handler(ctx: Context<CollectFees>) -> Result<()> {
         return Ok(());
     }
 
-    let total_fees = sweepable as u64;
-
-    if total_fees == 0 {
-        msg!("No fees to collect this epoch");
-        return Ok(());
-    }
+    let total_fees = u64::try_from(sweepable).map_err(|_| StakingError::MathOverflow)?;
 
     let treasury = &mut ctx.accounts.treasury;
 

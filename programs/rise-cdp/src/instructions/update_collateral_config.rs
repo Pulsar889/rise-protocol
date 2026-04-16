@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use crate::state::CollateralConfig;
+use crate::state::{CollateralConfig, CdpConfig};
 use crate::errors::CdpError;
 
 pub fn handler(
@@ -87,8 +87,18 @@ pub fn handler(
 
 #[derive(Accounts)]
 pub struct UpdateCollateralConfig<'info> {
-    /// Protocol authority — only this account can update collateral configs.
+    /// Protocol authority — must match cdp_config.authority.
+    #[account(
+        constraint = authority.key() == cdp_config.authority @ CdpError::Unauthorized
+    )]
     pub authority: Signer<'info>,
+
+    /// Global CDP config — provides the stored authority pubkey for validation.
+    #[account(
+        seeds = [b"cdp_config"],
+        bump = cdp_config.bump
+    )]
+    pub cdp_config: Account<'info, CdpConfig>,
 
     /// The collateral config to update.
     #[account(

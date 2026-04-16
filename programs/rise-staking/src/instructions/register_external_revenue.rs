@@ -2,6 +2,13 @@ use anchor_lang::prelude::*;
 use crate::state::{GlobalPool, ProtocolTreasury};
 use crate::errors::StakingError;
 
+/// Governance program ID — matches the constant in collect_fees.rs.
+const GOVERNANCE_PROGRAM_ID: Pubkey = pubkey!("CtMKhgY5xKiwLB5jmQ44PRF9QsUqXqSbiyVbFsidskHz");
+
+/// Byte offset of `total_verise` (u128) in the serialized GovernanceConfig account.
+/// Layout: [8 disc][32 authority][32 rise_mint][16 total_verise]...
+const TOTAL_VERISE_OFFSET: usize = 72;
+
 /// Called by the CDP program to register revenue that has already been
 /// deposited into treasury_vault. Updates the revenue_index so veRISE
 /// holders can claim their share.
@@ -16,12 +23,31 @@ pub fn handler(
     let treasury = &mut ctx.accounts.treasury;
 
     if verise_lamports > 0 {
-        // Standard accumulator: index += raw_lamports (no INDEX_SCALE).
-        // At claim time: claimable = index_delta * user_verise / total_verise.
-        treasury.revenue_index = treasury
-            .revenue_index
-            .checked_add(verise_lamports as u128)
-            .ok_or(StakingError::MathOverflow)?;
+        // Per-share accumulator: index += amount * INDEX_SCALE / total_verise.
+        // Must match collect_fees.rs so both revenue paths use the same scale.
+        // At claim time: claimable = index_delta * user_verise / INDEX_SCALE.
+        let gov_data = ctx.accounts.governance_config.try_borrow_data()
+            .map_err(|_| StakingError::InvalidGovernanceConfig)?;
+        require!(gov_data.len() >= TOTAL_VERISE_OFFSET + 16, StakingError::InvalidGovernanceConfig);
+        let total_verise = u128::from_le_bytes(
+            gov_data[TOTAL_VERISE_OFFSET..TOTAL_VERISE_OFFSET + 16]
+                .try_into()
+                .map_err(|_| StakingError::InvalidGovernanceConfig)?
+        );
+        drop(gov_data);
+
+        if total_verise > 0 {
+            let index_increment = (verise_lamports as u128)
+                .checked_mul(ProtocolTreasury::INDEX_SCALE)
+                .ok_or(StakingError::MathOverflow)?
+                .checked_div(total_verise)
+                .ok_or(StakingError::MathOverflow)?;
+
+            treasury.revenue_index = treasury
+                .revenue_index
+                .checked_add(index_increment)
+                .ok_or(StakingError::MathOverflow)?;
+        }
 
         treasury.total_distributed = treasury
             .total_distributed
@@ -65,4 +91,12 @@ pub struct RegisterExternalRevenue<'info> {
         bump = treasury.bump
     )]
     pub treasury: Account<'info, ProtocolTreasury>,
+
+    /// CHECK: GovernanceConfig PDA from the governance program.
+    /// Owner validated against the hardcoded governance program ID.
+    /// Read-only — provides total_verise for the per-share revenue accumulator.
+    #[account(
+        constraint = *governance_config.owner == GOVERNANCE_PROGRAM_ID @ StakingError::InvalidGovernanceConfig
+    )]
+    pub governance_config: UncheckedAccount<'info>,
 }
