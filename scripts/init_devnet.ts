@@ -25,12 +25,12 @@ const CDP_PROGRAM_ID = new PublicKey("3snPJTuZP9XHNciH7Q5KZzsvk2doxpuoYqWXf8JofE
 const KEYPAIR_PATH = process.env.ANCHOR_WALLET ??
   `${process.env.HOME}/.config/solana/id.json`;
 
-// Pyth pull-oracle feed IDs (32-byte hex, stored as Pubkey in on-chain config).
+// Pyth pull-oracle feed IDs (32-byte hex → stored as Pubkey bytes in on-chain config).
 // These are the global Pyth feed identifiers — same on devnet and mainnet.
-const FEED_SOL_USD  = new PublicKey("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d");
-const FEED_ETH_USD  = new PublicKey("ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace");
-const FEED_USDC_USD = new PublicKey("eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a");
-const FEED_USDT_USD = new PublicKey("2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b");
+const FEED_SOL_USD  = new PublicKey(Buffer.from("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d", "hex"));
+const FEED_ETH_USD  = new PublicKey(Buffer.from("ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace", "hex"));
+const FEED_USDC_USD = new PublicKey(Buffer.from("eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a", "hex"));
+const FEED_USDT_USD = new PublicKey(Buffer.from("2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b", "hex"));
 
 // Collateral mints (devnet)
 const MINTS = {
