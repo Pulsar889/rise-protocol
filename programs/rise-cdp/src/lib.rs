@@ -17,6 +17,7 @@ pub mod rise_cdp {
     /// Initialize a new accepted collateral type. Authority only.
     pub fn initialize_collateral_config(
         ctx: Context<InitializeCollateralConfig>,
+        feed_id: Pubkey,
         max_ltv_bps: u16,
         liquidation_threshold_bps: u16,
         liquidation_penalty_bps: u16,
@@ -27,7 +28,7 @@ pub mod rise_cdp {
         conversion_slippage_bps: u16,
     ) -> Result<()> {
         instructions::initialize_collateral_config::handler(
-            ctx, max_ltv_bps, liquidation_threshold_bps, liquidation_penalty_bps,
+            ctx, feed_id, max_ltv_bps, liquidation_threshold_bps, liquidation_penalty_bps,
             base_rate_bps, rate_slope1_bps, rate_slope2_bps,
             optimal_utilization_bps, conversion_slippage_bps,
         )
@@ -43,6 +44,7 @@ pub mod rise_cdp {
     /// Update parameters on an existing collateral config. Authority only.
     pub fn update_collateral_config(
         ctx: Context<UpdateCollateralConfig>,
+        feed_id: Option<Pubkey>,
         max_ltv_bps: Option<u16>,
         liquidation_threshold_bps: Option<u16>,
         liquidation_penalty_bps: Option<u16>,
@@ -54,7 +56,7 @@ pub mod rise_cdp {
         active: Option<bool>,
     ) -> Result<()> {
         instructions::update_collateral_config::handler(
-            ctx, max_ltv_bps, liquidation_threshold_bps, liquidation_penalty_bps,
+            ctx, feed_id, max_ltv_bps, liquidation_threshold_bps, liquidation_penalty_bps,
             base_rate_bps, rate_slope1_bps, rate_slope2_bps,
             optimal_utilization_bps, conversion_slippage_bps, active,
         )
@@ -103,8 +105,8 @@ pub mod rise_cdp {
     }
 
     /// Initialize a payment token config (SOL, USDC, USDT, BTC, ETH). Authority only.
-    pub fn initialize_payment_config(ctx: Context<InitializePaymentConfig>) -> Result<()> {
-        instructions::initialize_payment_config::handler(ctx)
+    pub fn initialize_payment_config(ctx: Context<InitializePaymentConfig>, feed_id: Pubkey) -> Result<()> {
+        instructions::initialize_payment_config::handler(ctx, feed_id)
     }
 
     /// Repay all or part of a CDP debt using SOL or an accepted SPL token.

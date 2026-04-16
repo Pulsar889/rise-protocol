@@ -4,6 +4,7 @@ use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, Borr
 use crate::errors::CdpError;
 use rise_staking::state::GlobalPool;
 use rise_staking::program::RiseStaking;
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 /// Mint additional riseSOL against an existing open position.
 ///
@@ -24,8 +25,8 @@ pub fn handler(ctx: Context<BorrowMore>, additional_rise_sol: u64) -> Result<()>
     // ── LTV check with new total debt ────────────────────────────────────────
     // Use fresh oracle prices — position.collateral_usd_value may be stale
     // if the collateral price has moved since the position was opened or last topped up.
-    let collateral_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.pyth_price_feed)?;
-    let sol_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_feed)?;
+    let collateral_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.price_update, &ctx.accounts.collateral_config.pyth_price_feed.to_bytes())?;
+    let sol_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_update, &ctx.accounts.sol_payment_config.pyth_price_feed.to_bytes())?;
 
     let token_decimals = ctx.accounts.collateral_mint.decimals;
     let decimal_scale = 10u128.pow(token_decimals as u32);
@@ -207,13 +208,11 @@ pub struct BorrowMore<'info> {
     )]
     pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
 
-    /// CHECK: Pyth price feed for the collateral token — must match collateral_config.pyth_price_feed.
-    #[account(constraint = pyth_price_feed.key() == collateral_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
-    pub pyth_price_feed: AccountInfo<'info>,
+    /// Pyth PriceUpdateV2 for collateral token — feed_id validated inside get_pyth_price.
+    pub price_update: Account<'info, PriceUpdateV2>,
 
-    /// CHECK: Pyth price feed for SOL/USD — must match sol_payment_config.pyth_price_feed.
-    #[account(constraint = sol_price_feed.key() == sol_payment_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
-    pub sol_price_feed: AccountInfo<'info>,
+    /// Pyth PriceUpdateV2 for SOL/USD — feed_id validated inside get_pyth_price.
+    pub sol_price_update: Account<'info, PriceUpdateV2>,
 
     /// Collateral mint — needed for decimal scaling when recomputing collateral USD value.
     #[account(constraint = collateral_mint.key() == collateral_config.mint @ CdpError::CollateralNotAccepted)]

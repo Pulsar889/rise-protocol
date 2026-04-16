@@ -36,6 +36,9 @@ describe("rise-governance", () => {
   let userRiseAccount: PublicKey;
   let treasury: PublicKey;
 
+  // Set during createProposal, used by castVote / closeProposal tests
+  let testProposal: PublicKey;
+
   const NONCE = 0;
   const LOCK_SLOTS = 604_800; // 1 week
 
@@ -99,6 +102,8 @@ describe("rise-governance", () => {
     console.log("VeLock PDA:", veLock.toBase58());
   });
 
+  // ── Initialization ──────────────────────────────────────────────────────────
+
   it("Initializes governance", async () => {
     const configInfo = await provider.connection.getAccountInfo(govConfig);
     if (configInfo !== null) {
@@ -106,7 +111,7 @@ describe("rise-governance", () => {
       return;
     }
 
-    // Set proposal threshold to 1 lamport so tests pass easily
+    // Set proposal threshold to 1 so tests pass without large RISE holdings
     await govProgram.methods
       .initializeGovernance(new anchor.BN(1), 1000)
       .accounts({
@@ -147,10 +152,11 @@ describe("rise-governance", () => {
     console.log("RISE vault initialized:", riseVault.toBase58());
   });
 
+  // ── Locking ─────────────────────────────────────────────────────────────────
+
   it("Locks RISE and receives veRISE", async () => {
     const lockAmount = 100_000 * LAMPORTS_PER_SOL;
 
-    // Skip if lock already exists (persistent validator re-run)
     const lockInfo = await provider.connection.getAccountInfo(veLock);
     if (lockInfo !== null) {
       const lock = await govProgram.account.veLock.fetch(veLock);
@@ -161,16 +167,12 @@ describe("rise-governance", () => {
 
     const beforeBalance = await getAccount(provider.connection, userRiseAccount);
 
-    // Fresh NFT mint keypair for this lock position
     const nftMintKeypair = Keypair.generate();
-
-    // ATA for the NFT (user receives 1 token)
     const userNftAta = getAssociatedTokenAddressSync(
       nftMintKeypair.publicKey,
       authority.publicKey
     );
 
-    // Metaplex metadata PDA: seeds = ["metadata", TOKEN_METADATA_PROGRAM_ID, nft_mint]
     const TOKEN_METADATA_PROGRAM_ID = new PublicKey("metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s");
     const [nftMetadata] = PublicKey.findProgramAddressSync(
       [
@@ -217,6 +219,42 @@ describe("rise-governance", () => {
     console.log("Lock expires at slot:", lock.lockEndSlot.toString());
   });
 
+  it("Rejects unlocking a non-expired lock", async () => {
+    const lockInfo = await provider.connection.getAccountInfo(veLock);
+    if (!lockInfo) {
+      console.log("VeLock not found — skipping");
+      return;
+    }
+
+    const lock = await govProgram.account.veLock.fetch(veLock);
+    const currentSlot = await provider.connection.getSlot();
+
+    if (lock.lockEndSlot.toNumber() <= currentSlot) {
+      console.log("Lock already expired — skipping negative test");
+      return;
+    }
+
+    try {
+      await govProgram.methods
+        .unlockRise()
+        .accounts({
+          user: authority.publicKey,
+          config: govConfig,
+          lock: veLock,
+          userRiseAccount: userRiseAccount,
+          riseVault: riseVault,
+          nftMint: lock.nftMint,
+          userNftAta: getAssociatedTokenAddressSync(lock.nftMint, authority.publicKey),
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .rpc();
+      assert.fail("Should have thrown LockNotExpired");
+    } catch (err) {
+      assert.include(err.toString(), "LockNotExpired");
+      console.log("Correctly rejected unlock of non-expired lock");
+    }
+  });
+
   it("Extends a lock", async () => {
     const lockBefore = await govProgram.account.veLock.fetch(veLock);
     const oldEndSlot = lockBefore.lockEndSlot.toNumber();
@@ -234,6 +272,8 @@ describe("rise-governance", () => {
     assert.isTrue(lockAfter.lockEndSlot.toNumber() > oldEndSlot);
     console.log("Lock extended to slot:", lockAfter.lockEndSlot.toString());
   });
+
+  // ── Gauge voting ────────────────────────────────────────────────────────────
 
   it("Records gauge votes", async () => {
     const fakePool1 = Keypair.generate().publicKey;
@@ -259,26 +299,53 @@ describe("rise-governance", () => {
     console.log("Gauge votes: Pool 1 -> 6000 bps, Pool 2 -> 4000 bps");
   });
 
+  // ── Config updates ──────────────────────────────────────────────────────────
+
+  it("Updates governance config", async () => {
+    const configBefore = await govProgram.account.governanceConfig.fetch(govConfig);
+    const originalThreshold = configBefore.proposalThreshold;
+
+    // Change to MIN_PROPOSAL_THRESHOLD (100_000 raw) and back
+    const testThreshold = new anchor.BN(100_000);
+
+    await govProgram.methods
+      .updateGovernanceConfig(testThreshold, null, null, null)
+      .accounts({
+        authority: authority.publicKey,
+        config: govConfig,
+      })
+      .rpc({ commitment: "confirmed" });
+
+    const configAfter = await govProgram.account.governanceConfig.fetch(govConfig, "confirmed");
+    assert.equal(configAfter.proposalThreshold.toString(), testThreshold.toString());
+    console.log("proposal_threshold updated to:", testThreshold.toString());
+
+    // Reset to original
+    await govProgram.methods
+      .updateGovernanceConfig(originalThreshold, null, null, null)
+      .accounts({
+        authority: authority.publicKey,
+        config: govConfig,
+      })
+      .rpc({ commitment: "confirmed" });
+
+    const configReset = await govProgram.account.governanceConfig.fetch(govConfig, "confirmed");
+    assert.equal(configReset.proposalThreshold.toString(), originalThreshold.toString());
+    console.log("proposal_threshold reset to:", originalThreshold.toString());
+  });
+
+  // ── Proposals ───────────────────────────────────────────────────────────────
+
   it("Creates a governance proposal", async () => {
-    // Proposal #0 is the canonical proposal for this test suite.
-    // Check if it already exists before attempting creation.
-    const [proposal0] = PublicKey.findProgramAddressSync(
-      [Buffer.from("proposal"), new anchor.BN(0).toArrayLike(Buffer, "le", 8)],
-      govProgram.programId
-    );
-    const proposal0Info = await provider.connection.getAccountInfo(proposal0);
-    if (proposal0Info !== null) {
-      console.log("Proposal #0 already exists — skipping");
-      const proposalAccount = await govProgram.account.proposal.fetch(proposal0);
-      assert.equal(proposalAccount.index.toString(), "0");
-      assert.equal(proposalAccount.executed, false);
+    const govConfigData = await govProgram.account.governanceConfig.fetch(govConfig);
+
+    if (govConfigData.activeProposalCount.toNumber() >= 10) {
+      console.log("Active proposal cap reached (10) — skipping");
       return;
     }
 
-    // Derive the proposal PDA from the current on-chain proposal_count so the seeds
-    // match what the program will use at init time (seeds = [b"proposal", count.to_le_bytes()]).
-    const govConfigData = await govProgram.account.governanceConfig.fetch(govConfig);
-    const [proposal] = PublicKey.findProgramAddressSync(
+    const proposalIndex = govConfigData.proposalCount.toNumber();
+    [testProposal] = PublicKey.findProgramAddressSync(
       [Buffer.from("proposal"), govConfigData.proposalCount.toArrayLike(Buffer, "le", 8)],
       govProgram.programId
     );
@@ -289,40 +356,43 @@ describe("rise-governance", () => {
       description[i] = descText.charCodeAt(i);
     }
 
+    // create_proposal now takes all locks via remainingAccounts — no single lock account
     await govProgram.methods
       .createProposal(description, Keypair.generate().publicKey)
       .accounts({
         proposer: authority.publicKey,
         config: govConfig,
-        lock: veLock,
-        proposal: proposal,
+        proposal: testProposal,
         systemProgram: SystemProgram.programId,
       })
+      .remainingAccounts([
+        { pubkey: veLock, isSigner: false, isWritable: false },
+      ])
       .rpc();
 
-    const proposalAccount = await govProgram.account.proposal.fetch(proposal);
-    assert.equal(proposalAccount.index.toString(), govConfigData.proposalCount.toString());
+    const proposalAccount = await govProgram.account.proposal.fetch(testProposal);
+    assert.equal(proposalAccount.index.toString(), proposalIndex.toString());
     assert.equal(proposalAccount.executed, false);
-    console.log(`Proposal #${govConfigData.proposalCount} created`);
+    console.log(`Proposal #${proposalIndex} created at ${testProposal.toBase58()}`);
     console.log("Voting ends at slot:", proposalAccount.votingEndSlot.toString());
   });
 
   it("Casts a vote on proposal", async () => {
-    // Always vote on proposal #0.
-    const [proposal] = PublicKey.findProgramAddressSync(
-      [Buffer.from("proposal"), new anchor.BN(0).toArrayLike(Buffer, "le", 8)],
-      govProgram.programId
-    );
+    if (!testProposal) {
+      console.log("No testProposal set (createProposal skipped) — skipping");
+      return;
+    }
 
+    // voteRecord seeds: [b"vote_record", lock.key(), proposal.key()]
     const [voteRecord] = PublicKey.findProgramAddressSync(
-      [Buffer.from("vote_record"), authority.publicKey.toBuffer(), proposal.toBuffer()],
+      [Buffer.from("vote_record"), veLock.toBuffer(), testProposal.toBuffer()],
       govProgram.programId
     );
 
     const voteRecordInfo = await provider.connection.getAccountInfo(voteRecord);
     if (voteRecordInfo !== null) {
       console.log("Vote already cast — skipping");
-      const proposalAccount = await govProgram.account.proposal.fetch(proposal);
+      const proposalAccount = await govProgram.account.proposal.fetch(testProposal);
       assert.isTrue(proposalAccount.votesFor.toNumber() > 0);
       return;
     }
@@ -333,16 +403,75 @@ describe("rise-governance", () => {
         voter: authority.publicKey,
         config: govConfig,
         lock: veLock,
-        proposal: proposal,
+        proposal: testProposal,
         voteRecord: voteRecord,
         systemProgram: SystemProgram.programId,
       })
-      .rpc();
+      .rpc({ commitment: "confirmed" });
 
-    const proposalAccount = await govProgram.account.proposal.fetch(proposal);
+    const proposalAccount = await govProgram.account.proposal.fetch(testProposal, "confirmed");
     assert.isTrue(proposalAccount.votesFor.toNumber() > 0);
     console.log("Vote cast FOR, votes for:", proposalAccount.votesFor.toString());
   });
+
+  it("Rejects casting a duplicate vote", async () => {
+    if (!testProposal) {
+      console.log("No testProposal set — skipping");
+      return;
+    }
+
+    const [voteRecord] = PublicKey.findProgramAddressSync(
+      [Buffer.from("vote_record"), veLock.toBuffer(), testProposal.toBuffer()],
+      govProgram.programId
+    );
+
+    try {
+      await govProgram.methods
+        .castVote(false)
+        .accounts({
+          voter: authority.publicKey,
+          config: govConfig,
+          lock: veLock,
+          proposal: testProposal,
+          voteRecord: voteRecord,
+          systemProgram: SystemProgram.programId,
+        })
+        .rpc();
+      assert.fail("Should have thrown AlreadyVoted");
+    } catch (err) {
+      // "already in use" from Anchor when the account already exists, or AlreadyVoted
+      const msg = err.toString();
+      assert.isTrue(
+        msg.includes("AlreadyVoted") || msg.includes("already in use"),
+        `Unexpected error: ${msg}`
+      );
+      console.log("Correctly rejected duplicate vote");
+    }
+  });
+
+  it("Rejects closing an active proposal", async () => {
+    if (!testProposal) {
+      console.log("No testProposal set — skipping");
+      return;
+    }
+
+    try {
+      await govProgram.methods
+        .closeProposal()
+        .accounts({
+          authority: authority.publicKey,
+          config: govConfig,
+          proposal: testProposal,
+        })
+        .rpc();
+      assert.fail("Should have thrown VotingNotEnded");
+    } catch (err) {
+      assert.include(err.toString(), "VotingNotEnded");
+      console.log("Correctly rejected closing an active proposal");
+    }
+  });
+
+  // ── IDL completeness ────────────────────────────────────────────────────────
 
   it("Governance program has all expected instructions", async () => {
     const names = govProgram.idl.instructions.map((ix: any) => ix.name);
@@ -354,8 +483,10 @@ describe("rise-governance", () => {
     assert.include(names, "voteGauge");
     assert.include(names, "createProposal");
     assert.include(names, "castVote");
+    assert.include(names, "closeProposal");
     assert.include(names, "executeProposal");
     assert.include(names, "claimRevenueShare");
+    assert.include(names, "updateGovernanceConfig");
     console.log("All governance instructions present");
   });
 });

@@ -1,4 +1,5 @@
 use anchor_lang::prelude::*;
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 use crate::errors::CdpError;
 
 /// Target price scale: 1e6 (micro-USD).
@@ -6,18 +7,29 @@ use crate::errors::CdpError;
 /// e.g. $170.00 SOL → 170_000_000
 const TARGET_EXPO: i32 = -6;
 
-/// Read a USD price from a Pyth price feed account.
+/// Maximum age for a price update in seconds.
+const MAX_PRICE_AGE_SECS: u64 = 60;
+
+/// Read a USD price from a Pyth PriceUpdateV2 account (pull oracle).
+///
+/// `feed_id` is the 32-byte Pyth feed identifier stored in the collateral or
+/// payment config. The function validates that the price update's embedded
+/// feed_id matches, that the price is fresh (≤ 60 s), and that the confidence
+/// interval is within 2% of the price.
 ///
 /// Returns the price scaled to 1e6 (micro-USD) as a u128.
-/// Enforces a 60-second max price age — rejects stale feeds.
-pub fn get_pyth_price(price_feed: &AccountInfo) -> Result<u128> {
-    let feed = pyth_sdk_solana::load_price_feed_from_account_info(price_feed)
-        .map_err(|_| error!(CdpError::InvalidOraclePrice))?;
-
+pub fn get_pyth_price(price_update: &Account<PriceUpdateV2>, feed_id: &[u8; 32]) -> Result<u128> {
     let clock = Clock::get()?;
-    let price = feed
-        .get_price_no_older_than(clock.unix_timestamp, 60)
-        .ok_or_else(|| error!(CdpError::StaleOraclePrice))?;
+
+    let price = price_update
+        .get_price_no_older_than(&clock, MAX_PRICE_AGE_SECS, feed_id)
+        .map_err(|e| {
+            use pyth_solana_receiver_sdk::error::GetPriceError;
+            match e {
+                GetPriceError::MismatchedFeedId => error!(CdpError::WrongPriceFeed),
+                _ => error!(CdpError::StaleOraclePrice),
+            }
+        })?;
 
     require!(price.price > 0, CdpError::InvalidOraclePrice);
 
@@ -33,10 +45,9 @@ pub fn get_pyth_price(price_feed: &AccountInfo) -> Result<u128> {
     );
 
     let raw = price.price as u128;
-    let expo = price.expo; // e.g. -8 for most USD pairs
+    let expo = price.exponent;
 
     // Adjust exponent to TARGET_EXPO (-6).
-    // adj = expo - TARGET_EXPO; positive means multiply, negative means divide.
     let adj = expo - TARGET_EXPO;
 
     let scaled = if adj >= 0 {

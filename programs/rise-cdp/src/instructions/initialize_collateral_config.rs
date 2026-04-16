@@ -5,6 +5,7 @@ use crate::errors::CdpError;
 
 pub fn handler(
     ctx: Context<InitializeCollateralConfig>,
+    feed_id: Pubkey,
     max_ltv_bps: u16,
     liquidation_threshold_bps: u16,
     liquidation_penalty_bps: u16,
@@ -26,7 +27,9 @@ pub fn handler(
     let config = &mut ctx.accounts.collateral_config;
 
     config.mint = ctx.accounts.collateral_mint.key();
-    config.pyth_price_feed = ctx.accounts.pyth_price_feed.key();
+    // Store the 32-byte Pyth feed ID as a Pubkey. This is the pull-oracle feed
+    // identifier used to validate PriceUpdateV2 accounts at instruction time.
+    config.pyth_price_feed = feed_id;
     config.max_ltv_bps = max_ltv_bps;
     config.liquidation_threshold_bps = liquidation_threshold_bps;
     config.liquidation_penalty_bps = liquidation_penalty_bps;
@@ -40,6 +43,7 @@ pub fn handler(
     config.bump = ctx.bumps.collateral_config;
 
     msg!("Collateral config initialized for mint: {}", config.mint);
+    msg!("Feed ID: {}", feed_id);
     msg!("Max LTV: {} bps", max_ltv_bps);
     msg!("Liquidation threshold: {} bps", liquidation_threshold_bps);
     msg!("Base rate: {} bps | Slope1: {} bps | Slope2: {} bps | Optimal util: {} bps",
@@ -66,9 +70,6 @@ pub struct InitializeCollateralConfig<'info> {
 
     /// The collateral token mint being whitelisted.
     pub collateral_mint: Account<'info, Mint>,
-
-    /// CHECK: Pyth price feed for this collateral type.
-    pub pyth_price_feed: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
 }

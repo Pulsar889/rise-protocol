@@ -1,14 +1,16 @@
 use anchor_lang::prelude::*;
 use crate::state::PaymentConfig;
 
-pub fn handler(ctx: Context<InitializePaymentConfig>) -> Result<()> {
+pub fn handler(ctx: Context<InitializePaymentConfig>, feed_id: Pubkey) -> Result<()> {
     let config = &mut ctx.accounts.payment_config;
     config.mint = ctx.accounts.mint.key();
-    config.pyth_price_feed = ctx.accounts.pyth_price_feed.key();
+    // Store the 32-byte Pyth feed ID as a Pubkey (pull oracle feed identifier).
+    config.pyth_price_feed = feed_id;
     config.active = true;
     config.bump = ctx.bumps.payment_config;
 
     msg!("Payment config initialized for mint: {}", config.mint);
+    msg!("Feed ID: {}", feed_id);
     msg!(
         "Native SOL: {}",
         config.is_native_sol()
@@ -32,9 +34,6 @@ pub struct InitializePaymentConfig<'info> {
 
     /// CHECK: The payment token mint. Pass SystemProgram ID for native SOL.
     pub mint: UncheckedAccount<'info>,
-
-    /// CHECK: Pyth price feed for this payment token.
-    pub pyth_price_feed: AccountInfo<'info>,
 
     pub system_program: Program<'info, System>,
 }

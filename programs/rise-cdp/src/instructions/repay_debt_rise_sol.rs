@@ -3,6 +3,7 @@ use anchor_spl::token::{self, Token, TokenAccount, Transfer, Burn, Mint, SyncNat
 use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig, PaymentConfig};
 use crate::errors::CdpError;
 use rise_staking::program::RiseStaking;
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 /// Repay all or part of a CDP position's debt using riseSOL tokens directly.
 ///
@@ -159,8 +160,8 @@ pub fn handler(
 
         if shortfall > 0 && !shortfall_route_plan_data.is_empty() {
             // Compute how much SOL the shortfall tokens are worth via Pyth.
-            let coll_price = crate::pyth::get_pyth_price(&ctx.accounts.pyth_price_feed)?;
-            let sol_price  = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_feed)?;
+            let coll_price = crate::pyth::get_pyth_price(&ctx.accounts.price_update, &ctx.accounts.collateral_config.pyth_price_feed.to_bytes())?;
+            let sol_price  = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_update, &ctx.accounts.sol_payment_config.pyth_price_feed.to_bytes())?;
             let decimals   = ctx.accounts.collateral_mint.decimals;
             let dec_scale  = 10u128.pow(decimals as u32);
 
@@ -386,13 +387,11 @@ pub struct RepayDebtRiseSol<'info> {
     )]
     pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
 
-    /// CHECK: Pyth price feed for the collateral token (shortfall path only).
-    #[account(constraint = pyth_price_feed.key() == collateral_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
-    pub pyth_price_feed: AccountInfo<'info>,
+    /// Pyth PriceUpdateV2 for collateral token — used only in the shortfall buyback path.
+    pub price_update: Account<'info, PriceUpdateV2>,
 
-    /// CHECK: Pyth price feed for SOL/USD (shortfall path only).
-    #[account(constraint = sol_price_feed.key() == sol_payment_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
-    pub sol_price_feed: AccountInfo<'info>,
+    /// Pyth PriceUpdateV2 for SOL/USD — used only in the shortfall buyback path.
+    pub sol_price_update: Account<'info, PriceUpdateV2>,
 
     // ── Jupiter accounts (shortfall buyback path only) ────────────────────────
 

@@ -4,6 +4,7 @@ use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, Borr
 use crate::errors::CdpError;
 use rise_staking::state::GlobalPool;
 use rise_staking::program::RiseStaking;
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 pub fn handler(
     ctx: Context<OpenPosition>,
@@ -23,10 +24,10 @@ pub fn handler(
 
     // --- Price validation ---
     // Get collateral USD price from Pyth
-    let collateral_usd_price = get_pyth_price(&ctx.accounts.pyth_price_feed)?;
+    let collateral_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.price_update, &ctx.accounts.collateral_config.pyth_price_feed.to_bytes())?;
 
     // Get SOL USD price from Pyth
-    let sol_usd_price = get_pyth_price(&ctx.accounts.sol_price_feed)?;
+    let sol_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_update, &ctx.accounts.sol_payment_config.pyth_price_feed.to_bytes())?;
 
     // Calculate collateral USD value
     // collateral_usd = amount * price / 10^token_decimals
@@ -185,10 +186,6 @@ pub fn handler(
     Ok(())
 }
 
-fn get_pyth_price(price_feed: &AccountInfo) -> Result<u128> {
-    crate::pyth::get_pyth_price(price_feed)
-}
-
 #[derive(Accounts)]
 #[instruction(collateral_amount: u64, rise_sol_to_mint: u64, nonce: u8)]
 pub struct OpenPosition<'info> {
@@ -255,13 +252,11 @@ pub struct OpenPosition<'info> {
     )]
     pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
 
-    /// CHECK: Pyth price feed for collateral token — must match collateral_config.pyth_price_feed.
-    #[account(constraint = pyth_price_feed.key() == collateral_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
-    pub pyth_price_feed: AccountInfo<'info>,
+    /// Pyth PriceUpdateV2 for collateral token — feed_id validated inside get_pyth_price.
+    pub price_update: Account<'info, PriceUpdateV2>,
 
-    /// CHECK: Pyth price feed for SOL/USD — must match sol_payment_config.pyth_price_feed.
-    #[account(constraint = sol_price_feed.key() == sol_payment_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
-    pub sol_price_feed: AccountInfo<'info>,
+    /// Pyth PriceUpdateV2 for SOL/USD — feed_id validated inside get_pyth_price.
+    pub sol_price_update: Account<'info, PriceUpdateV2>,
 
     /// The riseSOL mint — needed for the mint_for_cdp CPI.
     #[account(

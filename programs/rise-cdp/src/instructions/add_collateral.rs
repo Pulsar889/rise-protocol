@@ -2,6 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
 use crate::state::{CdpPosition, CollateralConfig, PaymentConfig};
 use crate::errors::CdpError;
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 
 pub fn handler(ctx: Context<AddCollateral>, amount: u64) -> Result<()> {
@@ -38,8 +39,8 @@ pub fn handler(ctx: Context<AddCollateral>, amount: u64) -> Result<()> {
         .ok_or(CdpError::MathOverflow)?;
 
     // Get updated collateral price and recompute health factor
-    let collateral_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.pyth_price_feed)?;
-    let sol_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_feed)?;
+    let collateral_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.price_update, &ctx.accounts.collateral_config.pyth_price_feed.to_bytes())?;
+    let sol_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_update, &ctx.accounts.sol_payment_config.pyth_price_feed.to_bytes())?;
 
     let token_decimals = ctx.accounts.collateral_mint.decimals;
     let decimal_scale = 10u128.pow(token_decimals as u32);
@@ -120,13 +121,11 @@ pub struct AddCollateral<'info> {
     )]
     pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
 
-    /// CHECK: Pyth price feed for collateral — must match collateral_config.pyth_price_feed.
-    #[account(constraint = pyth_price_feed.key() == collateral_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
-    pub pyth_price_feed: AccountInfo<'info>,
+    /// Pyth PriceUpdateV2 for collateral token — feed_id validated inside get_pyth_price.
+    pub price_update: Account<'info, PriceUpdateV2>,
 
-    /// CHECK: Pyth price feed for SOL — must match sol_payment_config.pyth_price_feed.
-    #[account(constraint = sol_price_feed.key() == sol_payment_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
-    pub sol_price_feed: AccountInfo<'info>,
+    /// Pyth PriceUpdateV2 for SOL/USD — feed_id validated inside get_pyth_price.
+    pub sol_price_update: Account<'info, PriceUpdateV2>,
 
     pub token_program: Program<'info, Token>,
 }

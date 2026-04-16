@@ -4,6 +4,7 @@ use crate::errors::CdpError;
 
 pub fn handler(
     ctx: Context<UpdateCollateralConfig>,
+    feed_id: Option<Pubkey>,
     max_ltv_bps: Option<u16>,
     liquidation_threshold_bps: Option<u16>,
     liquidation_penalty_bps: Option<u16>,
@@ -15,6 +16,11 @@ pub fn handler(
     active: Option<bool>,
 ) -> Result<()> {
     let config = &mut ctx.accounts.collateral_config;
+
+    if let Some(fid) = feed_id {
+        msg!("pyth feed_id: {} → {}", config.pyth_price_feed, fid);
+        config.pyth_price_feed = fid;
+    }
 
     if let Some(ltv) = max_ltv_bps {
         require!(ltv <= 9_500, CdpError::ZeroAmount);

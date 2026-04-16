@@ -6,6 +6,8 @@
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
+    "@pythnetwork/hermes-client": "^3.1.0",
+    "@pythnetwork/solana-utils": "^0.6.0",
     "@solana/spl-token": "^0.4.14"
   },
   "devDependencies": {

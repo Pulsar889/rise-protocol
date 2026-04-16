@@ -266,11 +266,11 @@ describe("rise-staking", () => {
         systemProgram: SystemProgram.programId,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
-      .rpc();
+      .rpc({ commitment: "confirmed" });
 
     // Unstaking now creates a WithdrawalTicket instead of returning SOL immediately.
     // Verify the ticket was created with the correct owner and amount.
-    const ticket = await program.account.withdrawalTicket.fetch(withdrawalTicket);
+    const ticket = await program.account.withdrawalTicket.fetch(withdrawalTicket, "confirmed");
     assert.equal(ticket.owner.toBase58(), authority.publicKey.toBase58());
     assert.equal(ticket.solAmount.toString(), unstakeAmount.toString());
     assert.isTrue(ticket.claimableEpoch.toNumber() > 0);

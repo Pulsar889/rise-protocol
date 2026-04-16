@@ -4,6 +4,7 @@ use anchor_spl::token::{self, Token, TokenAccount, Transfer as TokenTransfer, Mi
 use crate::state::{CdpPosition, CollateralConfig, PaymentConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig};
 use crate::errors::CdpError;
 use rise_staking::state::GlobalPool;
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 /// Repay all or part of a CDP position's debt.
 ///
@@ -187,8 +188,8 @@ pub fn handler(
         let sf_tokens = owed.saturating_sub(available);
 
         let sf_sol = if sf_tokens > 0 && !shortfall_route_plan_data.is_empty() {
-            let coll_price = crate::pyth::get_pyth_price(&ctx.accounts.pyth_price_feed)?;
-            let sol_price  = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_feed)?;
+            let coll_price = crate::pyth::get_pyth_price(&ctx.accounts.price_update, &ctx.accounts.collateral_config.pyth_price_feed.to_bytes())?;
+            let sol_price  = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_update, &ctx.accounts.sol_payment_config.pyth_price_feed.to_bytes())?;
             let decimals   = ctx.accounts.collateral_mint.decimals;
             let dec_scale  = 10u128.pow(decimals as u32);
 
@@ -479,13 +480,11 @@ pub struct RepayDebt<'info> {
     )]
     pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
 
-    /// CHECK: Pyth price feed for the collateral token — used only when shortfall buyback occurs.
-    #[account(constraint = pyth_price_feed.key() == collateral_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
-    pub pyth_price_feed: AccountInfo<'info>,
+    /// Pyth PriceUpdateV2 for collateral token — used only when shortfall buyback occurs.
+    pub price_update: Account<'info, PriceUpdateV2>,
 
-    /// CHECK: Pyth price feed for SOL/USD — used only when shortfall buyback occurs.
-    #[account(constraint = sol_price_feed.key() == sol_payment_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
-    pub sol_price_feed: AccountInfo<'info>,
+    /// Pyth PriceUpdateV2 for SOL/USD — used only when shortfall buyback occurs.
+    pub sol_price_update: Account<'info, PriceUpdateV2>,
 
     // ── SPL payment token accounts (pass None for native SOL) ────────────────
 

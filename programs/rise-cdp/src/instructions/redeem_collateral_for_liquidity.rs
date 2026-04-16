@@ -3,6 +3,7 @@ use anchor_spl::token::{self, Token, TokenAccount, Transfer, Mint, CloseAccount}
 use crate::state::{CollateralConfig, CdpConfig, PaymentConfig};
 use crate::errors::CdpError;
 use rise_staking::state::GlobalPool;
+use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 /// Permissionless liquidity backstop. Anyone can call this when the staking pool's
 /// liquid buffer cannot cover queued withdrawal tickets. The protocol seizes
@@ -44,8 +45,8 @@ pub fn handler(
     // ── Cap amount to what is actually needed to cover the shortfall ──────────
     // Prevents callers from seizing more collateral than necessary, which would
     // haircut all borrowers' entitlements beyond what the situation requires.
-    let collateral_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.pyth_price_feed)?;
-    let sol_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_feed)?;
+    let collateral_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.price_update, &ctx.accounts.collateral_config.pyth_price_feed.to_bytes())?;
+    let sol_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_update, &ctx.accounts.sol_payment_config.pyth_price_feed.to_bytes())?;
 
     let shortfall_lamports = pool.pending_withdrawals_lamports
         .saturating_sub(pool.liquid_buffer_lamports);
@@ -245,13 +246,11 @@ pub struct RedeemCollateralForLiquidity<'info> {
     )]
     pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
 
-    /// CHECK: Pyth price feed for the collateral token — must match collateral_config.pyth_price_feed.
-    #[account(constraint = pyth_price_feed.key() == collateral_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
-    pub pyth_price_feed: AccountInfo<'info>,
+    /// Pyth PriceUpdateV2 for collateral token — feed_id validated inside get_pyth_price.
+    pub price_update: Account<'info, PriceUpdateV2>,
 
-    /// CHECK: Pyth price feed for SOL/USD — must match sol_payment_config.pyth_price_feed.
-    #[account(constraint = sol_price_feed.key() == sol_payment_config.pyth_price_feed @ CdpError::WrongPriceFeed)]
-    pub sol_price_feed: AccountInfo<'info>,
+    /// Pyth PriceUpdateV2 for SOL/USD — feed_id validated inside get_pyth_price.
+    pub sol_price_update: Account<'info, PriceUpdateV2>,
 
     pub staking_program: Program<'info, rise_staking::program::RiseStaking>,
     pub token_program: Program<'info, Token>,
