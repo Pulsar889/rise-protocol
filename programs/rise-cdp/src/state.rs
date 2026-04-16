@@ -88,12 +88,15 @@ impl BorrowRewards {
     /// `pending_rewards`. Does NOT update `reward_debt` — the caller must do
     /// that after adjusting debt size, using `new_debt * config.reward_per_token / REWARD_SCALE`.
     pub fn settle(&mut self, reward_per_token: u128, current_debt: u64) -> Result<()> {
-        let earned = (current_debt as u128)
-            .checked_mul(reward_per_token)
-            .ok_or(anchor_lang::error!(crate::errors::CdpError::MathOverflow))?
-            .checked_div(BorrowRewardsConfig::REWARD_SCALE)
-            .ok_or(anchor_lang::error!(crate::errors::CdpError::MathOverflow))?
-            .saturating_sub(self.reward_debt) as u64;
+        let earned = u64::try_from(
+            (current_debt as u128)
+                .checked_mul(reward_per_token)
+                .ok_or(anchor_lang::error!(crate::errors::CdpError::MathOverflow))?
+                .checked_div(BorrowRewardsConfig::REWARD_SCALE)
+                .ok_or(anchor_lang::error!(crate::errors::CdpError::MathOverflow))?
+                .checked_sub(self.reward_debt)
+                .ok_or(anchor_lang::error!(crate::errors::CdpError::MathOverflow))?
+        ).map_err(|_| anchor_lang::error!(crate::errors::CdpError::MathOverflow))?;
 
         self.pending_rewards = self.pending_rewards
             .checked_add(earned)

@@ -17,7 +17,7 @@ pub fn handler(ctx: Context<CollectFees>) -> Result<()> {
 
     require!(
         current_epoch > ctx.accounts.treasury.last_collection_epoch,
-        StakingError::InvalidFeeBps
+        StakingError::EpochNotAdvanced
     );
 
     let pool = &ctx.accounts.pool;

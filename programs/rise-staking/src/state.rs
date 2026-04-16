@@ -73,12 +73,15 @@ impl UserStakeRewards {
     /// Settle newly-accrued rewards into `pending_rewards` based on the current
     /// global `reward_per_token`.  Call this BEFORE changing `rise_sol_amount`.
     pub fn settle(&mut self, reward_per_token: u128) -> Result<()> {
-        let earned = (self.rise_sol_amount as u128)
-            .checked_mul(reward_per_token)
-            .ok_or(anchor_lang::error!(crate::errors::StakingError::MathOverflow))?
-            .checked_div(StakeRewardsConfig::REWARD_SCALE)
-            .ok_or(anchor_lang::error!(crate::errors::StakingError::MathOverflow))?
-            .saturating_sub(self.reward_debt) as u64;
+        let earned = u64::try_from(
+            (self.rise_sol_amount as u128)
+                .checked_mul(reward_per_token)
+                .ok_or(anchor_lang::error!(crate::errors::StakingError::MathOverflow))?
+                .checked_div(StakeRewardsConfig::REWARD_SCALE)
+                .ok_or(anchor_lang::error!(crate::errors::StakingError::MathOverflow))?
+                .checked_sub(self.reward_debt)
+                .ok_or(anchor_lang::error!(crate::errors::StakingError::MathOverflow))?
+        ).map_err(|_| anchor_lang::error!(crate::errors::StakingError::MathOverflow))?;
 
         self.pending_rewards = self.pending_rewards
             .checked_add(earned)

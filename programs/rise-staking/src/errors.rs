@@ -40,4 +40,7 @@ pub enum StakingError {
 
     #[msg("Invalid governance config account")]
     InvalidGovernanceConfig,
+
+    #[msg("Fee collection already performed this epoch")]
+    EpochNotAdvanced,
 }
