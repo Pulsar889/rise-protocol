@@ -37,4 +37,7 @@ pub enum StakingError {
 
     #[msg("No staking rewards to claim")]
     NoRewardsToClaim,
+
+    #[msg("Invalid governance config account")]
+    InvalidGovernanceConfig,
 }

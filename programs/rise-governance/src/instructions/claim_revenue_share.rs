@@ -6,7 +6,6 @@ use crate::errors::GovernanceError;
 pub fn handler(ctx: Context<ClaimRevenueShare>) -> Result<()> {
     let current_slot = Clock::get()?.slot;
     let lock = &mut ctx.accounts.lock;
-    let config = &ctx.accounts.config;
 
     // Guard: expired locks (current_verise == 0 when slot >= lock_end_slot) cannot claim.
     let current_verise = lock.current_verise(current_slot);
@@ -20,17 +19,20 @@ pub fn handler(ctx: Context<ClaimRevenueShare>) -> Result<()> {
 
     require!(index_delta > 0, GovernanceError::NoRewardsToClaim);
 
-    // claimable = index_delta * lock.verise_amount / total_verise
+    // claimable = index_delta * lock.verise_amount / INDEX_SCALE
+    //
+    // The revenue_index accumulator uses a per-share pattern:
+    //   at deposit: index += amount * INDEX_SCALE / total_verise
+    //   at claim:   claimable = index_delta * user_verise / INDEX_SCALE
     //
     // Uses the lock's initial (non-decayed) verise_amount so that revenue share is
-    // proportional to lock size. This ensures sum(all claimable) == index_delta,
-    // preventing chronic under-distribution caused by mixing decayed and initial values.
-    // The expiry guard above prevents expired locks from claiming.
-    let claimable = if config.total_verise > 0 {
+    // proportional to lock size. The expiry guard above prevents expired locks from claiming.
+    let index_scale = rise_staking::state::ProtocolTreasury::INDEX_SCALE;
+    let claimable = if index_scale > 0 {
         index_delta
             .checked_mul(lock.verise_amount as u128)
             .ok_or(GovernanceError::MathOverflow)?
-            .checked_div(config.total_verise)
+            .checked_div(index_scale)
             .ok_or(GovernanceError::MathOverflow)? as u64
     } else {
         0
