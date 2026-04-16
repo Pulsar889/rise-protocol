@@ -43,8 +43,9 @@ const GAUGE_POOLS = {
   "RISE/SOL     (Raydium)": makePlaceholder("rise-pool-rise-sol"),
 };
 
-// Epoch emissions: 100,000 RISE per epoch (9 decimals → 100_000 * 1e9)
-const EPOCH_EMISSIONS = new BN("100000000000000");
+// Epoch emissions: 1,142,308 RISE per epoch (6 decimals → 1_142_308 * 1e6)
+// WARNING: RISE has 6 decimals, NOT 9. Using 1e9 would set emissions 1000x too high.
+const EPOCH_EMISSIONS = new BN("1142308000000");
 
 // ─────────────────────────────────────────────────────────────────────────────
 
