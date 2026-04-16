@@ -21,6 +21,14 @@ import {
   ASSOCIATED_TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { assert } from "chai";
+import { buildCdpPriceUpdateIxs } from "./pyth-pull";
+
+// Pyth pull-oracle feed IDs (32-byte hex, same on devnet and mainnet)
+const USDC_FEED_ID_HEX = "eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a";
+const SOL_FEED_ID_HEX  = "ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d";
+// Feed ID pubkeys stored in CollateralConfig / PaymentConfig on-chain
+const usdcFeedId = new PublicKey(Buffer.from(USDC_FEED_ID_HEX, "hex"));
+const solFeedId  = new PublicKey(Buffer.from(SOL_FEED_ID_HEX, "hex"));
 
 const MIN_DEPLOYER_BALANCE = 2 * LAMPORTS_PER_SOL; // 2 SOL covers all devnet test transactions
 
@@ -45,9 +53,6 @@ describe("rise-cdp", () => {
   let userUsdcAccount: PublicKey;
   let userRiseSolAccount: PublicKey;
   let userRiseAccount: PublicKey;      // borrower's RISE token account for claiming
-  // Real Pyth devnet price feed accounts (owned by gSbePebfvPy7tRqimPoVecS2UsBvYv46ynrzWocc92s)
-  const usdcPriceFeed = new PublicKey("5SSkXsEKQepHHAewytPVwdej4epN1nxgLVM84L4KXgy7");
-  const solPriceFeed  = new PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix");
   let borrowRewardsConfig: PublicKey;
   let borrowRewardsVault: PublicKey;
 
@@ -79,8 +84,6 @@ describe("rise-cdp", () => {
       [Buffer.from("pool_vault")],
       stakingProgram.programId
     );
-
-    // usdcPriceFeed and solPriceFeed are real Pyth devnet accounts — no setup needed.
 
     // Create USDC mock mint (6 decimals). Use "confirmed" so the mint account is
     // visible to all RPC nodes before we create an ATA for it.
@@ -289,6 +292,7 @@ describe("rise-cdp", () => {
   it("Initializes USDC collateral config", async () => {
     await cdpProgram.methods
       .initializeCollateralConfig(
+        usdcFeedId,
         USDC_MAX_LTV_BPS,
         USDC_LIQ_THRESHOLD_BPS,
         USDC_LIQ_PENALTY_BPS,
@@ -302,7 +306,6 @@ describe("rise-cdp", () => {
         authority: authority.publicKey,
         collateralConfig: collateralConfig,
         collateralMint: usdcMint,
-        pythPriceFeed: usdcPriceFeed,
         systemProgram: SystemProgram.programId,
       })
       .rpc({ commitment: "confirmed" });
@@ -329,6 +332,7 @@ describe("rise-cdp", () => {
 
     await cdpProgram.methods
       .updateCollateralConfig(
+        null,     // feed_id — no change
         null,     // max_ltv_bps — no change
         null,     // liquidation_threshold_bps — no change
         null,     // liquidation_penalty_bps — no change
@@ -351,7 +355,7 @@ describe("rise-cdp", () => {
 
     // Reset back to original rate
     await cdpProgram.methods
-      .updateCollateralConfig(null, null, null, USDC_BASE_RATE_BPS, null, null, null, null, null)
+      .updateCollateralConfig(null, null, null, null, USDC_BASE_RATE_BPS, null, null, null, null, null)
       .accounts({
         authority: authority.publicKey,
         collateralConfig: collateralConfig,
@@ -369,7 +373,7 @@ describe("rise-cdp", () => {
     const startState = await cdpProgram.account.collateralConfig.fetch(collateralConfig, "confirmed");
     if (!startState.active) {
       await cdpProgram.methods
-        .updateCollateralConfig(null, null, null, null, null, null, null, null, true)
+        .updateCollateralConfig(null, null, null, null, null, null, null, null, null, true)
         .accounts({
           authority: authority.publicKey,
           collateralConfig: collateralConfig,
@@ -380,7 +384,7 @@ describe("rise-cdp", () => {
 
     // Deactivate
     await cdpProgram.methods
-      .updateCollateralConfig(null, null, null, null, null, null, null, null, false)
+      .updateCollateralConfig(null, null, null, null, null, null, null, null, null, false)
       .accounts({
         authority: authority.publicKey,
         collateralConfig: collateralConfig,
@@ -393,7 +397,7 @@ describe("rise-cdp", () => {
 
     // Reactivate
     await cdpProgram.methods
-      .updateCollateralConfig(null, null, null, null, null, null, null, null, true)
+      .updateCollateralConfig(null, null, null, null, null, null, null, null, null, true)
       .accounts({
         authority: authority.publicKey,
         collateralConfig: collateralConfig,
@@ -445,19 +449,18 @@ describe("rise-cdp", () => {
       }
 
       await cdpProgram.methods
-        .initializePaymentConfig()
+        .initializePaymentConfig(solFeedId)
         .accounts({
           authority: authority.publicKey,
           paymentConfig,
           mint: solMintSentinel,
-          pythPriceFeed: solPriceFeed,
           systemProgram: SystemProgram.programId,
         })
         .rpc({ commitment: "confirmed" });
 
       const cfg = await cdpProgram.account.paymentConfig.fetch(paymentConfig, "confirmed");
       assert.equal(cfg.mint.toBase58(), solMintSentinel.toBase58());
-      assert.equal(cfg.pythPriceFeed.toBase58(), solPriceFeed.toBase58());
+      assert.equal(cfg.pythPriceFeed.toBase58(), solFeedId.toBase58());
       assert.equal(cfg.active, true);
 
       console.log("SOL payment config initialized");
@@ -477,12 +480,11 @@ describe("rise-cdp", () => {
       }
 
       await cdpProgram.methods
-        .initializePaymentConfig()
+        .initializePaymentConfig(usdcFeedId)
         .accounts({
           authority: authority.publicKey,
           paymentConfig,
           mint: usdcMint,
-          pythPriceFeed: usdcPriceFeed,
           systemProgram: SystemProgram.programId,
         })
         .rpc({ commitment: "confirmed" });
@@ -626,6 +628,9 @@ describe("rise-cdp", () => {
       const collateralAmount = 1_000 * 1_000_000; // 1000 USDC (6 dec)
       const riseSolToBorrow = 5_000_000_000; // 5 riseSOL in lamports (9 dec)
 
+      const { priceUpdateKeypair: puKp0, solPriceUpdateKeypair: spuKp0, priceUpdateIx: puIx0, solPriceUpdateIx: spuIx0 } =
+        await buildCdpPriceUpdateIxs(provider.connection, authority.publicKey, USDC_FEED_ID_HEX);
+
       await cdpProgram.methods
         .openPosition(
           new anchor.BN(collateralAmount),
@@ -641,8 +646,8 @@ describe("rise-cdp", () => {
           collateralMint: usdcMint,
           borrowerCollateralAccount: userUsdcAccount,
           collateralVault,
-          pythPriceFeed: usdcPriceFeed,
-          solPriceFeed: solPriceFeed,
+          priceUpdate: puKp0.publicKey,
+          solPriceUpdate: spuKp0.publicKey,
           riseSolMint,
           borrowerRiseSolAccount: userRiseSolAccount,
           stakingProgram: stakingProgram.programId,
@@ -651,6 +656,8 @@ describe("rise-cdp", () => {
           borrowRewardsConfig,
           borrowRewards,
         })
+        .preInstructions([puIx0, spuIx0])
+        .signers([puKp0, spuKp0])
         .rpc();
 
       const pos = await cdpProgram.account.cdpPosition.fetch(position);
@@ -666,6 +673,9 @@ describe("rise-cdp", () => {
       const posBefore = await cdpProgram.account.cdpPosition.fetch(position);
       const additionalHsol = 500_000_000; // 0.5 riseSOL
 
+      const { priceUpdateKeypair: puKp1, solPriceUpdateKeypair: spuKp1, priceUpdateIx: puIx1, solPriceUpdateIx: spuIx1 } =
+        await buildCdpPriceUpdateIxs(provider.connection, authority.publicKey, USDC_FEED_ID_HEX);
+
       await cdpProgram.methods
         .borrowMore(new anchor.BN(additionalHsol))
         .accounts({
@@ -674,7 +684,8 @@ describe("rise-cdp", () => {
           collateralConfig,
           globalPool,
           cdpConfig,
-          solPriceFeed: solPriceFeed,
+          priceUpdate: puKp1.publicKey,
+          solPriceUpdate: spuKp1.publicKey,
           riseSolMint,
           borrowerRiseSolAccount: userRiseSolAccount,
           stakingProgram: stakingProgram.programId,
@@ -682,6 +693,8 @@ describe("rise-cdp", () => {
           borrowRewardsConfig,
           borrowRewards,
         })
+        .preInstructions([puIx1, spuIx1])
+        .signers([puKp1, spuKp1])
         .rpc();
 
       const posAfter = await cdpProgram.account.cdpPosition.fetch(position);
@@ -703,12 +716,11 @@ describe("rise-cdp", () => {
       const cfgInfo = await provider.connection.getAccountInfo(solPaymentConfig);
       if (!cfgInfo) {
         await cdpProgram.methods
-          .initializePaymentConfig()
+          .initializePaymentConfig(solFeedId)
           .accounts({
             authority: authority.publicKey,
             paymentConfig: solPaymentConfig,
             mint: anchor.web3.SystemProgram.programId,
-            pythPriceFeed: solPriceFeed,
             systemProgram: SystemProgram.programId,
           })
           .rpc();
@@ -720,6 +732,9 @@ describe("rise-cdp", () => {
 
       // Pay 1 SOL (covers some principal; interest_accrued is 0 so all goes to principal)
       const paymentLamports = 1 * LAMPORTS_PER_SOL;
+
+      const { priceUpdateKeypair: puKp2, solPriceUpdateKeypair: spuKp2, priceUpdateIx: puIx2, solPriceUpdateIx: spuIx2 } =
+        await buildCdpPriceUpdateIxs(provider.connection, authority.publicKey, USDC_FEED_ID_HEX);
 
       await cdpProgram.methods
         .repayDebt(new anchor.BN(paymentLamports))
@@ -734,16 +749,17 @@ describe("rise-cdp", () => {
           poolVault,
           collateralVault,
           borrowerCollateralAccount: userUsdcAccount,
-          pythPriceFeed: solPriceFeed,
-          solPriceFeed: solPriceFeed,
+          priceUpdate: puKp2.publicKey,
+          solPriceUpdate: spuKp2.publicKey,
           paymentMint: null,
           borrowerPaymentAccount: null,
-          paymentVault: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           borrowRewardsConfig,
           borrowRewards,
         })
+        .preInstructions([puIx2, spuIx2])
+        .signers([puKp2, spuKp2])
         .rpc();
 
       const posAfter = await cdpProgram.account.cdpPosition.fetch(position);
@@ -792,6 +808,9 @@ describe("rise-cdp", () => {
         userUsdcAccount
       );
 
+      const { priceUpdateKeypair: puKp3, solPriceUpdateKeypair: spuKp3, priceUpdateIx: puIx3, solPriceUpdateIx: spuIx3 } =
+        await buildCdpPriceUpdateIxs(provider.connection, authority.publicKey, USDC_FEED_ID_HEX);
+
       await cdpProgram.methods
         .repayDebt(new anchor.BN(paymentLamports))
         .accounts({
@@ -805,16 +824,17 @@ describe("rise-cdp", () => {
           poolVault,
           collateralVault,
           borrowerCollateralAccount: userUsdcAccount,
-          pythPriceFeed: solPriceFeed,
-          solPriceFeed: solPriceFeed,
+          priceUpdate: puKp3.publicKey,
+          solPriceUpdate: spuKp3.publicKey,
           paymentMint: null,
           borrowerPaymentAccount: null,
-          paymentVault: null,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           borrowRewardsConfig,
           borrowRewards,
         })
+        .preInstructions([puIx3, spuIx3])
+        .signers([puKp3, spuKp3])
         .rpc();
 
       const posAfter = await cdpProgram.account.cdpPosition.fetch(position);
@@ -866,6 +886,9 @@ describe("rise-cdp", () => {
 
       const posInfo = await provider.connection.getAccountInfo(position1);
       if (!posInfo) {
+        const { priceUpdateKeypair: puKp4, solPriceUpdateKeypair: spuKp4, priceUpdateIx: puIx4, solPriceUpdateIx: spuIx4 } =
+          await buildCdpPriceUpdateIxs(provider.connection, authority.publicKey, USDC_FEED_ID_HEX);
+
         await cdpProgram.methods
           .openPosition(
             new anchor.BN(collateralAmount),
@@ -883,14 +906,16 @@ describe("rise-cdp", () => {
             borrowRewardsConfig,
             borrowRewards: borrowRewards1,
             collateralVault,
-            pythPriceFeed: usdcPriceFeed,
-            solPriceFeed: solPriceFeed,
+            priceUpdate: puKp4.publicKey,
+            solPriceUpdate: spuKp4.publicKey,
             riseSolMint,
             borrowerRiseSolAccount: userRiseSolAccount,
             stakingProgram: stakingProgram.programId,
             tokenProgram: TOKEN_PROGRAM_ID,
             systemProgram: SystemProgram.programId,
           })
+          .preInstructions([puIx4, spuIx4])
+          .signers([puKp4, spuKp4])
           .rpc();
       }
 
@@ -916,8 +941,10 @@ describe("rise-cdp", () => {
 
       // Partial repayment: burn 1 riseSOL
       const partialPayment = 1_000_000_000;
+      const { priceUpdateKeypair: puKp5, solPriceUpdateKeypair: spuKp5, priceUpdateIx: puIx5, solPriceUpdateIx: spuIx5 } =
+        await buildCdpPriceUpdateIxs(provider.connection, authority.publicKey, USDC_FEED_ID_HEX);
       await cdpProgram.methods
-        .repayDebtRiseSol(new anchor.BN(partialPayment))
+        .repayDebtRiseSol(new anchor.BN(partialPayment), [], new anchor.BN(0), 0)
         .accounts({
           borrower: authority.publicKey,
           position: position1,
@@ -928,13 +955,22 @@ describe("rise-cdp", () => {
           borrowerCollateralAccount: userUsdcAccount,
           cdpConfig,
           globalPool,
-          treasuryVault,
           stakingProgram: stakingProgram.programId,
+          priceUpdate: puKp5.publicKey,
+          solPriceUpdate: spuKp5.publicKey,
+          // Jupiter accounts are only used in the shortfall path; pass placeholders here
+          jupiterProgram: new PublicKey("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
+          jupiterProgramAuthority: SystemProgram.programId,
+          jupiterEventAuthority: SystemProgram.programId,
+          shortfallJupiterSourceToken: SystemProgram.programId,
+          shortfallJupiterDestinationToken: SystemProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           borrowRewardsConfig,
           borrowRewards: borrowRewards1,
         })
+        .preInstructions([puIx5, spuIx5])
+        .signers([puKp5, spuKp5])
         .rpc();
 
       let pos = await cdpProgram.account.cdpPosition.fetch(position1);
@@ -956,8 +992,10 @@ describe("rise-cdp", () => {
       // Full repayment: burn remaining 1 riseSOL
       const collateralBefore = (await getAccount(provider.connection, userUsdcAccount)).amount;
 
+      const { priceUpdateKeypair: puKp6, solPriceUpdateKeypair: spuKp6, priceUpdateIx: puIx6, solPriceUpdateIx: spuIx6 } =
+        await buildCdpPriceUpdateIxs(provider.connection, authority.publicKey, USDC_FEED_ID_HEX);
       await cdpProgram.methods
-        .repayDebtRiseSol(new anchor.BN(pos.riseSolDebtPrincipal.toNumber()))
+        .repayDebtRiseSol(new anchor.BN(pos.riseSolDebtPrincipal.toNumber()), [], new anchor.BN(0), 0)
         .accounts({
           borrower: authority.publicKey,
           position: position1,
@@ -968,13 +1006,21 @@ describe("rise-cdp", () => {
           borrowerCollateralAccount: userUsdcAccount,
           cdpConfig,
           globalPool,
-          treasuryVault,
           stakingProgram: stakingProgram.programId,
+          priceUpdate: puKp6.publicKey,
+          solPriceUpdate: spuKp6.publicKey,
+          jupiterProgram: new PublicKey("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
+          jupiterProgramAuthority: SystemProgram.programId,
+          jupiterEventAuthority: SystemProgram.programId,
+          shortfallJupiterSourceToken: SystemProgram.programId,
+          shortfallJupiterDestinationToken: SystemProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           borrowRewardsConfig,
           borrowRewards: borrowRewards1,
         })
+        .preInstructions([puIx6, spuIx6])
+        .signers([puKp6, spuKp6])
         .rpc();
 
       pos = await cdpProgram.account.cdpPosition.fetch(position1);
@@ -1026,7 +1072,7 @@ describe("rise-cdp", () => {
       const collateralState = await cdpProgram.account.collateralConfig.fetch(collateralConfig);
       if (!collateralState.active) {
         await cdpProgram.methods
-          .updateCollateralConfig(null, null, null, null, null, null, null, null, true)
+          .updateCollateralConfig(null, null, null, null, null, null, null, null, null, true)
           .accounts({
             authority: authority.publicKey,
             collateralConfig,
@@ -1070,6 +1116,9 @@ describe("rise-cdp", () => {
       if (posInfo) {
         console.log("brPosition already exists — skipping open");
       } else {
+        const { priceUpdateKeypair: puKp7, solPriceUpdateKeypair: spuKp7, priceUpdateIx: puIx7, solPriceUpdateIx: spuIx7 } =
+          await buildCdpPriceUpdateIxs(provider.connection, authority.publicKey, USDC_FEED_ID_HEX);
+
         await cdpProgram.methods
           .openPosition(
             new anchor.BN(collateralAmount),
@@ -1085,8 +1134,8 @@ describe("rise-cdp", () => {
             collateralMint: usdcMint,
             borrowerCollateralAccount: userUsdcAccount,
             collateralVault,
-            pythPriceFeed: usdcPriceFeed,
-            solPriceFeed: solPriceFeed,
+            priceUpdate: puKp7.publicKey,
+            solPriceUpdate: spuKp7.publicKey,
             riseSolMint,
             borrowerRiseSolAccount: userRiseSolAccount,
             stakingProgram: stakingProgram.programId,
@@ -1095,6 +1144,8 @@ describe("rise-cdp", () => {
             borrowRewardsConfig,
             borrowRewards: brBorrowRewards,
           })
+          .preInstructions([puIx7, spuIx7])
+          .signers([puKp7, spuKp7])
           .rpc();
       }
 
@@ -1153,6 +1204,9 @@ describe("rise-cdp", () => {
 
       const additionalBorrow = 500_000_000; // 0.5 riseSOL
 
+      const { priceUpdateKeypair: puKp8, solPriceUpdateKeypair: spuKp8, priceUpdateIx: puIx8, solPriceUpdateIx: spuIx8 } =
+        await buildCdpPriceUpdateIxs(provider.connection, authority.publicKey, USDC_FEED_ID_HEX);
+
       await cdpProgram.methods
         .borrowMore(new anchor.BN(additionalBorrow))
         .accounts({
@@ -1161,7 +1215,8 @@ describe("rise-cdp", () => {
           collateralConfig,
           globalPool,
           cdpConfig,
-          solPriceFeed: solPriceFeed,
+          priceUpdate: puKp8.publicKey,
+          solPriceUpdate: spuKp8.publicKey,
           riseSolMint,
           borrowerRiseSolAccount: userRiseSolAccount,
           stakingProgram: stakingProgram.programId,
@@ -1169,6 +1224,8 @@ describe("rise-cdp", () => {
           borrowRewardsConfig,
           borrowRewards: brBorrowRewards,
         })
+        .preInstructions([puIx8, spuIx8])
+        .signers([puKp8, spuKp8])
         .rpc();
 
       const brAfter = await cdpProgram.account.borrowRewards.fetch(brBorrowRewards);
@@ -1276,6 +1333,9 @@ describe("rise-cdp", () => {
       // Partial repay with 0.5 SOL
       const paymentLamports = 0.5 * anchor.web3.LAMPORTS_PER_SOL;
 
+      const { priceUpdateKeypair: puKp9, solPriceUpdateKeypair: spuKp9, priceUpdateIx: puIx9, solPriceUpdateIx: spuIx9 } =
+        await buildCdpPriceUpdateIxs(provider.connection, authority.publicKey, USDC_FEED_ID_HEX);
+
       await cdpProgram.methods
         .repayDebt(new anchor.BN(paymentLamports))
         .accounts({
@@ -1289,8 +1349,8 @@ describe("rise-cdp", () => {
           poolVault,
           collateralVault,
           borrowerCollateralAccount: userUsdcAccount,
-          pythPriceFeed: solPriceFeed,
-          solPriceFeed: solPriceFeed,
+          priceUpdate: puKp9.publicKey,
+          solPriceUpdate: spuKp9.publicKey,
           paymentMint: null,
           borrowerPaymentAccount: null,
           paymentVault: null,
@@ -1299,6 +1359,8 @@ describe("rise-cdp", () => {
           borrowRewardsConfig,
           borrowRewards: brBorrowRewards,
         })
+        .preInstructions([puIx9, spuIx9])
+        .signers([puKp9, spuKp9])
         .rpc();
 
       const brAfter = await cdpProgram.account.borrowRewards.fetch(brBorrowRewards);

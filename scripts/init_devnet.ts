@@ -25,10 +25,12 @@ const CDP_PROGRAM_ID = new PublicKey("3snPJTuZP9XHNciH7Q5KZzsvk2doxpuoYqWXf8JofE
 const KEYPAIR_PATH = process.env.ANCHOR_WALLET ??
   `${process.env.HOME}/.config/solana/id.json`;
 
-// Pyth devnet price feed accounts (used as oracle references)
-const PYTH_SOL_USD  = new PublicKey("J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix");
-const PYTH_ETH_USD  = new PublicKey("EdVCmQ9FSPcVe5YySXDPCRmc8aDQLKJ9xvYBMZPie1Vw");
-const PYTH_USDT_USD = new PublicKey("5SSkXsEKQepHHAewytPVwdej4epN1nxgLVM84L4KXgy7");
+// Pyth pull-oracle feed IDs (32-byte hex, stored as Pubkey in on-chain config).
+// These are the global Pyth feed identifiers — same on devnet and mainnet.
+const FEED_SOL_USD  = new PublicKey("ef0d8b6fda2ceba41da15d4095d1da392a0d2f8ed0c6c7bc0f4cfac8c280b56d");
+const FEED_ETH_USD  = new PublicKey("ff61491a931112ddf1bd8147cd1b641375f79f5825126d665480874634fd0ace");
+const FEED_USDC_USD = new PublicKey("eaa020c61cc479712813461ce153894a96a6c00b21ed0cfc2798d1f9a9e9c94a");
+const FEED_USDT_USD = new PublicKey("2b89b9dc8fdf9f34709a5b106b472f0f39bb6ca9ce04b0fd7f2e971688e2e53b");
 
 // Collateral mints (devnet)
 const MINTS = {
@@ -44,24 +46,25 @@ const MINTS = {
 
 // Collateral configs: [maxLtvBps, liqThreshBps, liqPenaltyBps,
 //                      baseRateBps, rateSlope1Bps, rateSlope2Bps,
-//                      optimalUtilBps, conversionSlippageBps, pythFeed]
+//                      optimalUtilBps, conversionSlippageBps, feedId]
+// feedId is the Pyth pull-oracle 32-byte feed identifier (stored as Pubkey).
 // NOTE: wETH, wBTC, USDC, USDT mainnet mint addresses don't exist as SPL Token
 // mints on devnet — skipped here. LST collaterals are the core use case.
 type CollateralParams = [number, number, number, number, number, number, number, number, PublicKey];
 
 const COLLATERAL_CONFIGS: Record<string, CollateralParams> = {
-  WSOL:    [7500, 8500, 500, 100, 400, 3000, 8000, 50, PYTH_SOL_USD],
-  riseSOL: [7800, 8700, 500, 100, 400, 3000, 8000, 50, PYTH_SOL_USD],
-  mSOL:    [7800, 8700, 500, 100, 400, 3000, 8000, 50, PYTH_SOL_USD],
-  JitoSOL: [7800, 8700, 500, 100, 400, 3000, 8000, 50, PYTH_SOL_USD],
+  WSOL:    [7500, 8500, 500, 100, 400, 3000, 8000, 50, FEED_SOL_USD],
+  riseSOL: [7800, 8700, 500, 100, 400, 3000, 8000, 50, FEED_SOL_USD],
+  mSOL:    [7800, 8700, 500, 100, 400, 3000, 8000, 50, FEED_SOL_USD],
+  JitoSOL: [7800, 8700, 500, 100, 400, 3000, 8000, 50, FEED_SOL_USD],
 };
 
-// Payment configs: [mint, pythFeed]
-// Native SOL uses SystemProgram.programId as sentinel
+// Payment configs: [symbol, mint, feedId]
+// Native SOL uses SystemProgram.programId as mint sentinel.
 const PAYMENT_CONFIGS: Array<[string, PublicKey, PublicKey]> = [
-  ["SOL",  SystemProgram.programId,        PYTH_SOL_USD],
-  ["USDC", MINTS.USDC,                     PYTH_USDT_USD],
-  ["USDT", MINTS.USDT,                     PYTH_USDT_USD],
+  ["SOL",  SystemProgram.programId, FEED_SOL_USD],
+  ["USDC", MINTS.USDC,              FEED_USDC_USD],
+  ["USDT", MINTS.USDT,              FEED_USDT_USD],
 ];
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -112,7 +115,7 @@ async function main() {
 
   // ── Initialize collateral configs ──────────────────────────────────────────
   for (const [symbol, params] of Object.entries(COLLATERAL_CONFIGS)) {
-    const [maxLtv, liqThresh, liqPenalty, baseRate, slope1, slope2, optUtil, slippage, pythFeed] = params;
+    const [maxLtv, liqThresh, liqPenalty, baseRate, slope1, slope2, optUtil, slippage, feedId] = params;
     const mint = MINTS[symbol as keyof typeof MINTS];
     const collateralConfig = deriveCollateralConfig(mint);
     const collateralVault  = deriveCollateralVault(mint);
@@ -123,13 +126,11 @@ async function main() {
     } else {
       try {
         const sig = await program.methods
-          .initializeCollateralConfig(maxLtv, liqThresh, liqPenalty, baseRate, slope1, slope2, optUtil, slippage)
+          .initializeCollateralConfig(feedId, maxLtv, liqThresh, liqPenalty, baseRate, slope1, slope2, optUtil, slippage)
           .accounts({
             authority:        payer.publicKey,
-            cdpConfig,
             collateralConfig,
             collateralMint:   mint,
-            pythPriceFeed:    pythFeed,
             systemProgram:    SystemProgram.programId,
           })
           .rpc();
@@ -166,7 +167,7 @@ async function main() {
   console.log();
 
   // ── Initialize payment configs ─────────────────────────────────────────────
-  for (const [symbol, mint, pythFeed] of PAYMENT_CONFIGS) {
+  for (const [symbol, mint, feedId] of PAYMENT_CONFIGS) {
     const paymentConfig = derivePaymentConfig(mint);
 
     if (await accountExists(connection, paymentConfig)) {
@@ -174,12 +175,11 @@ async function main() {
     } else {
       try {
         const sig = await program.methods
-          .initializePaymentConfig()
+          .initializePaymentConfig(feedId)
           .accounts({
             authority:      payer.publicKey,
             paymentConfig,
             mint,
-            pythPriceFeed:  pythFeed,
             systemProgram:  SystemProgram.programId,
           })
           .rpc();
