@@ -1,16 +1,107 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer};
-use crate::state::{CdpPosition, CollateralConfig, PaymentConfig};
+use crate::state::{CdpPosition, CollateralConfig, CdpConfig, PaymentConfig};
 use crate::errors::CdpError;
+use rise_staking::state::GlobalPool;
 use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 pub fn handler(ctx: Context<WithdrawExcess>, amount: u64) -> Result<()> {
+    require!(ctx.accounts.position.is_open, CdpError::PositionClosed);
+    require!(amount > 0, CdpError::ZeroAmount);
+
+    // ── Inline interest accrual ────────────────────────────────────────────────
+    {
+        let current_slot = Clock::get()?.slot;
+        let position = &mut ctx.accounts.position;
+        if current_slot > position.last_accrual_slot && position.rise_sol_debt_principal > 0 {
+            let slots_elapsed = current_slot
+                .checked_sub(position.last_accrual_slot)
+                .ok_or(CdpError::MathOverflow)? as u128;
+
+            let cdp_config = &ctx.accounts.cdp_config;
+            let config = &ctx.accounts.collateral_config;
+            let staking_supply = ctx.accounts.global_pool.staking_rise_sol_supply;
+
+            let ceiling = staking_supply
+                .checked_mul(cdp_config.debt_ceiling_multiplier_bps as u128)
+                .ok_or(CdpError::MathOverflow)?
+                .checked_div(10_000)
+                .ok_or(CdpError::MathOverflow)?;
+
+            let utilization_bps: u128 = if ceiling == 0 {
+                10_000
+            } else {
+                (cdp_config.cdp_rise_sol_minted
+                    .checked_mul(10_000)
+                    .ok_or(CdpError::MathOverflow)?
+                    .checked_div(ceiling)
+                    .ok_or(CdpError::MathOverflow)?)
+                    .min(10_000)
+            };
+
+            let optimal = config.optimal_utilization_bps as u128;
+
+            let effective_rate_bps: u128 = if utilization_bps <= optimal {
+                let slope1_contribution = if optimal == 0 {
+                    0
+                } else {
+                    (config.rate_slope1_bps as u128)
+                        .checked_mul(utilization_bps)
+                        .ok_or(CdpError::MathOverflow)?
+                        .checked_div(optimal)
+                        .ok_or(CdpError::MathOverflow)?
+                };
+                (config.base_rate_bps as u128)
+                    .checked_add(slope1_contribution)
+                    .ok_or(CdpError::MathOverflow)?
+            } else {
+                let excess = utilization_bps
+                    .checked_sub(optimal)
+                    .ok_or(CdpError::MathOverflow)?;
+                let range = 10_000u128
+                    .checked_sub(optimal)
+                    .ok_or(CdpError::MathOverflow)?;
+                let slope2_contribution = if range == 0 {
+                    config.rate_slope2_bps as u128
+                } else {
+                    (config.rate_slope2_bps as u128)
+                        .checked_mul(excess)
+                        .ok_or(CdpError::MathOverflow)?
+                        .checked_div(range)
+                        .ok_or(CdpError::MathOverflow)?
+                };
+                (config.base_rate_bps as u128)
+                    .checked_add(config.rate_slope1_bps as u128)
+                    .ok_or(CdpError::MathOverflow)?
+                    .checked_add(slope2_contribution)
+                    .ok_or(CdpError::MathOverflow)?
+            };
+
+            let interest = (position.rise_sol_debt_principal as u128)
+                .checked_mul(effective_rate_bps)
+                .ok_or(CdpError::MathOverflow)?
+                .checked_mul(slots_elapsed)
+                .ok_or(CdpError::MathOverflow)?
+                .checked_div(10_000)
+                .ok_or(CdpError::MathOverflow)?
+                .checked_div(CollateralConfig::SLOTS_PER_YEAR)
+                .ok_or(CdpError::MathOverflow)?;
+
+            let interest_u64 = u64::try_from(interest).map_err(|_| CdpError::MathOverflow)?;
+
+            if interest_u64 > 0 {
+                position.interest_accrued = position
+                    .interest_accrued
+                    .checked_add(interest_u64)
+                    .ok_or(CdpError::MathOverflow)?;
+                position.last_accrual_slot = current_slot;
+            }
+        }
+    }
+
     let position = &mut ctx.accounts.position;
     let config = &ctx.accounts.collateral_config;
     let liquidation_threshold_bps = config.liquidation_threshold_bps;
-
-    require!(position.is_open, CdpError::PositionClosed);
-    require!(amount > 0, CdpError::ZeroAmount);
 
     // Get current prices
     let collateral_usd_price = crate::pyth::get_pyth_price(&ctx.accounts.price_update, &ctx.accounts.collateral_config.pyth_price_feed.to_bytes())?;
@@ -156,6 +247,21 @@ pub struct WithdrawExcess<'info> {
         constraint = collateral_vault.mint == collateral_config.mint
     )]
     pub collateral_vault: Account<'info, TokenAccount>,
+
+    /// Global CDP config — needed for debt ceiling / utilization in interest accrual.
+    #[account(
+        seeds = [b"cdp_config"],
+        bump = cdp_config.bump
+    )]
+    pub cdp_config: Box<Account<'info, CdpConfig>>,
+
+    /// GlobalPool from the staking program — read for staking supply in interest accrual.
+    #[account(
+        seeds = [b"global_pool"],
+        seeds::program = rise_staking::ID,
+        bump = global_pool.bump
+    )]
+    pub global_pool: Box<Account<'info, GlobalPool>>,
 
     /// SOL payment config — provides the registered SOL/USD price feed pubkey for validation.
     #[account(
