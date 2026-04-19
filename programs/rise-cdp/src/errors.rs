@@ -73,4 +73,10 @@ pub enum CdpError {
 
     #[msg("Price feed account does not match the one registered for this collateral")]
     WrongPriceFeed,
+
+    #[msg("Shortfall buyback route provided but required remaining accounts are missing")]
+    MissingShortfallAccounts,
+
+    #[msg("Invalid account key provided")]
+    InvalidAccount,
 }

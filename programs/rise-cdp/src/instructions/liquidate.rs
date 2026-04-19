@@ -159,11 +159,13 @@ pub fn handler(
         // Proportionally split remaining SOL between interest and principal
         let total_target = principal_sol_target.saturating_add(interest_sol_target);
         let actual_interest_sol = if total_target > 0 && sol_after_fee > 0 {
-            (sol_after_fee as u128)
-                .checked_mul(interest_sol_target as u128)
-                .unwrap_or(0)
-                .checked_div(total_target as u128)
-                .unwrap_or(0) as u64
+            u64::try_from(
+                (sol_after_fee as u128)
+                    .checked_mul(interest_sol_target as u128)
+                    .ok_or(CdpError::MathOverflow)?
+                    .checked_div(total_target as u128)
+                    .ok_or(CdpError::MathOverflow)?
+            ).map_err(|_| CdpError::MathOverflow)?
         } else {
             0
         };

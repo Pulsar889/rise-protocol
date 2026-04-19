@@ -11,12 +11,15 @@ pub fn handler(ctx: Context<WithdrawLp>, amount: u64) -> Result<()> {
     let stake = &mut ctx.accounts.user_stake;
 
     // Settle pending rewards before withdrawal
-    let pending = (stake.lp_amount as u128)
-        .checked_mul(gauge.reward_per_token)
-        .ok_or(RewardsError::MathOverflow)?
-        .checked_div(Gauge::REWARD_SCALE)
-        .ok_or(RewardsError::MathOverflow)?
-        .saturating_sub(stake.reward_debt) as u64;
+    let pending = u64::try_from(
+        (stake.lp_amount as u128)
+            .checked_mul(gauge.reward_per_token)
+            .ok_or(RewardsError::MathOverflow)?
+            .checked_div(Gauge::REWARD_SCALE)
+            .ok_or(RewardsError::MathOverflow)?
+            .checked_sub(stake.reward_debt)
+            .ok_or(RewardsError::MathOverflow)?
+    ).map_err(|_| RewardsError::MathOverflow)?;
 
     stake.pending_rewards = stake.pending_rewards
         .checked_add(pending)

@@ -149,8 +149,8 @@ pub mod rise_cdp {
     /// Repay all or part of a CDP debt by burning riseSOL tokens directly (1:1).
     /// `shortfall_route_plan_data` is used on full repayment when seized collateral must be
     /// bought back via Jupiter. Pass empty / 0 when no shortfall is expected (the common case).
-    pub fn repay_debt_rise_sol(
-        ctx: Context<RepayDebtRiseSol>,
+    pub fn repay_debt_rise_sol<'info>(
+        ctx: Context<'_, '_, '_, 'info, RepayDebtRiseSol<'info>>,
         payment_rise_sol: u64,
         shortfall_route_plan_data: Vec<u8>,
         shortfall_quoted_out: u64,

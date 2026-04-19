@@ -22,7 +22,8 @@ pub fn handler(
     config.slots_per_epoch = slots_per_epoch;
     // Seed total_staking_supply from the pool's current staking supply so that
     // any stakers who existed before initialization are tracked correctly.
-    config.total_staking_supply = ctx.accounts.pool.staking_rise_sol_supply as u64;
+    config.total_staking_supply = u64::try_from(ctx.accounts.pool.staking_rise_sol_supply)
+        .map_err(|_| StakingError::MathOverflow)?;
     config.last_checkpoint_slot = current_slot;
     config.bump = ctx.bumps.stake_rewards_config;
 

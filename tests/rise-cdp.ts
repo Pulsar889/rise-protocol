@@ -941,8 +941,6 @@ describe("rise-cdp", () => {
 
       // Partial repayment: burn 1 riseSOL
       const partialPayment = 1_000_000_000;
-      const { priceUpdateKeypair: puKp5, solPriceUpdateKeypair: spuKp5, priceUpdateIx: puIx5, solPriceUpdateIx: spuIx5 } =
-        await buildCdpPriceUpdateIxs(provider.connection, authority.publicKey, USDC_FEED_ID_HEX);
       await cdpProgram.methods
         .repayDebtRiseSol(new anchor.BN(partialPayment), [], new anchor.BN(0), 0)
         .accounts({
@@ -956,21 +954,11 @@ describe("rise-cdp", () => {
           cdpConfig,
           globalPool,
           stakingProgram: stakingProgram.programId,
-          priceUpdate: puKp5.publicKey,
-          solPriceUpdate: spuKp5.publicKey,
-          // Jupiter accounts are only used in the shortfall path; pass placeholders here
-          jupiterProgram: new PublicKey("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
-          jupiterProgramAuthority: SystemProgram.programId,
-          jupiterEventAuthority: SystemProgram.programId,
-          shortfallJupiterSourceToken: SystemProgram.programId,
-          shortfallJupiterDestinationToken: SystemProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           borrowRewardsConfig,
           borrowRewards: borrowRewards1,
         })
-        .preInstructions([puIx5, spuIx5])
-        .signers([puKp5, spuKp5])
         .rpc();
 
       let pos = await cdpProgram.account.cdpPosition.fetch(position1);
@@ -992,8 +980,6 @@ describe("rise-cdp", () => {
       // Full repayment: burn remaining 1 riseSOL
       const collateralBefore = (await getAccount(provider.connection, userUsdcAccount)).amount;
 
-      const { priceUpdateKeypair: puKp6, solPriceUpdateKeypair: spuKp6, priceUpdateIx: puIx6, solPriceUpdateIx: spuIx6 } =
-        await buildCdpPriceUpdateIxs(provider.connection, authority.publicKey, USDC_FEED_ID_HEX);
       await cdpProgram.methods
         .repayDebtRiseSol(new anchor.BN(pos.riseSolDebtPrincipal.toNumber()), [], new anchor.BN(0), 0)
         .accounts({
@@ -1007,20 +993,11 @@ describe("rise-cdp", () => {
           cdpConfig,
           globalPool,
           stakingProgram: stakingProgram.programId,
-          priceUpdate: puKp6.publicKey,
-          solPriceUpdate: spuKp6.publicKey,
-          jupiterProgram: new PublicKey("JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"),
-          jupiterProgramAuthority: SystemProgram.programId,
-          jupiterEventAuthority: SystemProgram.programId,
-          shortfallJupiterSourceToken: SystemProgram.programId,
-          shortfallJupiterDestinationToken: SystemProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
           borrowRewardsConfig,
           borrowRewards: borrowRewards1,
         })
-        .preInstructions([puIx6, spuIx6])
-        .signers([puKp6, spuKp6])
         .rpc();
 
       pos = await cdpProgram.account.cdpPosition.fetch(position1);

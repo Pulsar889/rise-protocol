@@ -26,7 +26,8 @@ pub fn handler(ctx: Context<UnstakeRiseSol>, rise_sol_amount: u64) -> Result<()>
     if let Some(stake_rewards_config) = ctx.accounts.stake_rewards_config.as_mut() {
         stake_rewards_config.total_staking_supply = stake_rewards_config
             .total_staking_supply
-            .saturating_sub(rise_sol_amount);
+            .checked_sub(rise_sol_amount)
+            .ok_or(StakingError::MathOverflow)?;
     }
 
     let pool = &mut ctx.accounts.pool;

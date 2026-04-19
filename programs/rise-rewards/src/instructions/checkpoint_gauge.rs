@@ -13,7 +13,8 @@ pub fn handler(ctx: Context<CheckpointGauge>) -> Result<()> {
         config.current_epoch = config.current_epoch
             .checked_add(1)
             .ok_or(RewardsError::MathOverflow)?;
-        config.epoch_start_slot = current_slot;
+        config.epoch_start_slot = config.epoch_start_slot
+            .saturating_add(config.slots_per_epoch);
         msg!("Epoch advanced to: {}", config.current_epoch);
     }
 

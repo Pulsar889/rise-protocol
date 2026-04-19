@@ -86,7 +86,7 @@ pub struct AddCollateral<'info> {
         constraint = position.owner == borrower.key(),
         constraint = position.is_open @ CdpError::PositionClosed
     )]
-    pub position: Account<'info, CdpPosition>,
+    pub position: Box<Account<'info, CdpPosition>>,
 
     #[account(
         mut,
@@ -122,10 +122,10 @@ pub struct AddCollateral<'info> {
     pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
 
     /// Pyth PriceUpdateV2 for collateral token — feed_id validated inside get_pyth_price.
-    pub price_update: Account<'info, PriceUpdateV2>,
+    pub price_update: Box<Account<'info, PriceUpdateV2>>,
 
     /// Pyth PriceUpdateV2 for SOL/USD — feed_id validated inside get_pyth_price.
-    pub sol_price_update: Account<'info, PriceUpdateV2>,
+    pub sol_price_update: Box<Account<'info, PriceUpdateV2>>,
 
     pub token_program: Program<'info, Token>,
 }

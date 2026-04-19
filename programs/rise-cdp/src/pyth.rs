@@ -18,7 +18,19 @@ const MAX_PRICE_AGE_SECS: u64 = 60;
 /// interval is within 2% of the price.
 ///
 /// Returns the price scaled to 1e6 (micro-USD) as a u128.
+/// Variant for use with `remaining_accounts` — deserializes PriceUpdateV2 on demand.
+pub fn get_pyth_price_info(account_info: &AccountInfo, feed_id: &[u8; 32]) -> Result<u128> {
+    use anchor_lang::AccountDeserialize;
+    let data = account_info.try_borrow_data()?;
+    let price_update = PriceUpdateV2::try_deserialize(&mut &data[..])?;
+    get_pyth_price_inner(&price_update, feed_id)
+}
+
 pub fn get_pyth_price(price_update: &Account<PriceUpdateV2>, feed_id: &[u8; 32]) -> Result<u128> {
+    get_pyth_price_inner(price_update, feed_id)
+}
+
+fn get_pyth_price_inner(price_update: &PriceUpdateV2, feed_id: &[u8; 32]) -> Result<u128> {
     let clock = Clock::get()?;
 
     let price = price_update

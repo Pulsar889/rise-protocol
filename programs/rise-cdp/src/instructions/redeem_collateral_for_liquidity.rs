@@ -177,16 +177,16 @@ pub struct RedeemCollateralForLiquidity<'info> {
         seeds::program = rise_staking::ID,
         bump = global_pool.bump
     )]
-    pub global_pool: Account<'info, GlobalPool>,
+    pub global_pool: Box<Account<'info, GlobalPool>>,
 
     #[account(
         seeds = [b"collateral_config", collateral_config.mint.as_ref()],
         bump = collateral_config.bump
     )]
-    pub collateral_config: Account<'info, CollateralConfig>,
+    pub collateral_config: Box<Account<'info, CollateralConfig>>,
 
     #[account(constraint = collateral_mint.key() == collateral_config.mint @ CdpError::CollateralNotAccepted)]
-    pub collateral_mint: Account<'info, Mint>,
+    pub collateral_mint: Box<Account<'info, Mint>>,
 
     #[account(
         mut,
@@ -194,7 +194,7 @@ pub struct RedeemCollateralForLiquidity<'info> {
         bump,
         constraint = collateral_vault.mint == collateral_config.mint
     )]
-    pub collateral_vault: Account<'info, TokenAccount>,
+    pub collateral_vault: Box<Account<'info, TokenAccount>>,
 
     /// Intermediate holding account for seized tokens. Authority = collateral_vault
     /// so it can sign as user_transfer_authority for Jupiter.
@@ -206,18 +206,18 @@ pub struct RedeemCollateralForLiquidity<'info> {
         seeds = [b"cdp_seizure_vault", collateral_config.mint.as_ref()],
         bump
     )]
-    pub cdp_seizure_vault: Account<'info, TokenAccount>,
+    pub cdp_seizure_vault: Box<Account<'info, TokenAccount>>,
 
     /// Global CDP config — authority for cdp_wsol_vault.
     #[account(
         seeds = [b"cdp_config"],
         bump = cdp_config.bump
     )]
-    pub cdp_config: Account<'info, CdpConfig>,
+    pub cdp_config: Box<Account<'info, CdpConfig>>,
 
     /// Native SOL (WSOL) mint — Jupiter outputs WSOL which is then unwrapped.
     #[account(address = anchor_spl::token::spl_token::native_mint::ID)]
-    pub wsol_mint: Account<'info, Mint>,
+    pub wsol_mint: Box<Account<'info, Mint>>,
 
     /// Protocol WSOL buffer: receives Jupiter's WSOL output, then closed → pool_vault.
     #[account(
@@ -228,7 +228,7 @@ pub struct RedeemCollateralForLiquidity<'info> {
         seeds = [b"cdp_wsol_vault"],
         bump,
     )]
-    pub cdp_wsol_vault: Account<'info, TokenAccount>,
+    pub cdp_wsol_vault: Box<Account<'info, TokenAccount>>,
 
     /// CHECK: Staking pool SOL vault — receives unwrapped SOL from Jupiter output.
     #[account(
@@ -247,10 +247,10 @@ pub struct RedeemCollateralForLiquidity<'info> {
     pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
 
     /// Pyth PriceUpdateV2 for collateral token — feed_id validated inside get_pyth_price.
-    pub price_update: Account<'info, PriceUpdateV2>,
+    pub price_update: Box<Account<'info, PriceUpdateV2>>,
 
     /// Pyth PriceUpdateV2 for SOL/USD — feed_id validated inside get_pyth_price.
-    pub sol_price_update: Account<'info, PriceUpdateV2>,
+    pub sol_price_update: Box<Account<'info, PriceUpdateV2>>,
 
     pub staking_program: Program<'info, rise_staking::program::RiseStaking>,
     pub token_program: Program<'info, Token>,

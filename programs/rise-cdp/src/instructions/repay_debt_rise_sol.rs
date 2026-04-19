@@ -3,7 +3,6 @@ use anchor_spl::token::{self, Token, TokenAccount, Transfer, Burn, Mint, SyncNat
 use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig, PaymentConfig};
 use crate::errors::CdpError;
 use rise_staking::program::RiseStaking;
-use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 
 /// Repay all or part of a CDP position's debt using riseSOL tokens directly.
 ///
@@ -21,8 +20,99 @@ use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 /// reserve_vault → cdp_wsol_buyback_vault, which is then wrapped as WSOL and swapped via
 /// Jupiter → collateral tokens → borrower. Pass empty bytes / 0 for shortfall params in
 /// the common case (no shortfall expected).
-pub fn handler(
-    ctx: Context<RepayDebtRiseSol>,
+#[inline(never)]
+fn accrue_interest(
+    position: &mut CdpPosition,
+    cdp_config: &CdpConfig,
+    collateral_config: &CollateralConfig,
+    staking_supply: u128,
+    current_slot: u64,
+) -> Result<()> {
+    if current_slot > position.last_accrual_slot && position.rise_sol_debt_principal > 0 {
+        let slots_elapsed = current_slot
+            .checked_sub(position.last_accrual_slot)
+            .ok_or(CdpError::MathOverflow)? as u128;
+
+        let ceiling = staking_supply
+            .checked_mul(cdp_config.debt_ceiling_multiplier_bps as u128)
+            .ok_or(CdpError::MathOverflow)?
+            .checked_div(10_000)
+            .ok_or(CdpError::MathOverflow)?;
+
+        let utilization_bps: u128 = if ceiling == 0 {
+            10_000
+        } else {
+            (cdp_config.cdp_rise_sol_minted
+                .checked_mul(10_000)
+                .ok_or(CdpError::MathOverflow)?
+                .checked_div(ceiling)
+                .ok_or(CdpError::MathOverflow)?)
+                .min(10_000)
+        };
+
+        let optimal = collateral_config.optimal_utilization_bps as u128;
+
+        let effective_rate_bps: u128 = if utilization_bps <= optimal {
+            let slope1_contribution = if optimal == 0 {
+                0
+            } else {
+                (collateral_config.rate_slope1_bps as u128)
+                    .checked_mul(utilization_bps)
+                    .ok_or(CdpError::MathOverflow)?
+                    .checked_div(optimal)
+                    .ok_or(CdpError::MathOverflow)?
+            };
+            (collateral_config.base_rate_bps as u128)
+                .checked_add(slope1_contribution)
+                .ok_or(CdpError::MathOverflow)?
+        } else {
+            let excess = utilization_bps
+                .checked_sub(optimal)
+                .ok_or(CdpError::MathOverflow)?;
+            let range = 10_000u128
+                .checked_sub(optimal)
+                .ok_or(CdpError::MathOverflow)?;
+            let slope2_contribution = if range == 0 {
+                collateral_config.rate_slope2_bps as u128
+            } else {
+                (collateral_config.rate_slope2_bps as u128)
+                    .checked_mul(excess)
+                    .ok_or(CdpError::MathOverflow)?
+                    .checked_div(range)
+                    .ok_or(CdpError::MathOverflow)?
+            };
+            (collateral_config.base_rate_bps as u128)
+                .checked_add(collateral_config.rate_slope1_bps as u128)
+                .ok_or(CdpError::MathOverflow)?
+                .checked_add(slope2_contribution)
+                .ok_or(CdpError::MathOverflow)?
+        };
+
+        let interest = (position.rise_sol_debt_principal as u128)
+            .checked_mul(effective_rate_bps)
+            .ok_or(CdpError::MathOverflow)?
+            .checked_mul(slots_elapsed)
+            .ok_or(CdpError::MathOverflow)?
+            .checked_div(10_000)
+            .ok_or(CdpError::MathOverflow)?
+            .checked_div(CollateralConfig::SLOTS_PER_YEAR)
+            .ok_or(CdpError::MathOverflow)?;
+
+        let interest_u64 = u64::try_from(interest).map_err(|_| CdpError::MathOverflow)?;
+
+        if interest_u64 > 0 {
+            position.interest_accrued = position
+                .interest_accrued
+                .checked_add(interest_u64)
+                .ok_or(CdpError::MathOverflow)?;
+            position.last_accrual_slot = current_slot;
+        }
+    }
+    Ok(())
+}
+
+pub fn handler<'info>(
+    ctx: Context<'_, '_, '_, 'info, RepayDebtRiseSol<'info>>,
     payment_rise_sol: u64,
     shortfall_route_plan_data: Vec<u8>,
     shortfall_quoted_out: u64,
@@ -30,94 +120,17 @@ pub fn handler(
 ) -> Result<()> {
     require!(payment_rise_sol > 0, CdpError::ZeroAmount);
 
-    // ── Inline interest accrual ────────────────────────────────────────────────
+    // ── Interest accrual (extracted to avoid BPF stack overflow) ──────────────
     {
         let current_slot = Clock::get()?.slot;
-        let position = &mut ctx.accounts.position;
-        if current_slot > position.last_accrual_slot && position.rise_sol_debt_principal > 0 {
-            let slots_elapsed = current_slot
-                .checked_sub(position.last_accrual_slot)
-                .ok_or(CdpError::MathOverflow)? as u128;
-
-            let cdp_config = &ctx.accounts.cdp_config;
-            let config = &ctx.accounts.collateral_config;
-            let staking_supply = ctx.accounts.global_pool.staking_rise_sol_supply;
-
-            let ceiling = staking_supply
-                .checked_mul(cdp_config.debt_ceiling_multiplier_bps as u128)
-                .ok_or(CdpError::MathOverflow)?
-                .checked_div(10_000)
-                .ok_or(CdpError::MathOverflow)?;
-
-            let utilization_bps: u128 = if ceiling == 0 {
-                10_000
-            } else {
-                (cdp_config.cdp_rise_sol_minted
-                    .checked_mul(10_000)
-                    .ok_or(CdpError::MathOverflow)?
-                    .checked_div(ceiling)
-                    .ok_or(CdpError::MathOverflow)?)
-                    .min(10_000)
-            };
-
-            let optimal = config.optimal_utilization_bps as u128;
-
-            let effective_rate_bps: u128 = if utilization_bps <= optimal {
-                let slope1_contribution = if optimal == 0 {
-                    0
-                } else {
-                    (config.rate_slope1_bps as u128)
-                        .checked_mul(utilization_bps)
-                        .ok_or(CdpError::MathOverflow)?
-                        .checked_div(optimal)
-                        .ok_or(CdpError::MathOverflow)?
-                };
-                (config.base_rate_bps as u128)
-                    .checked_add(slope1_contribution)
-                    .ok_or(CdpError::MathOverflow)?
-            } else {
-                let excess = utilization_bps
-                    .checked_sub(optimal)
-                    .ok_or(CdpError::MathOverflow)?;
-                let range = 10_000u128
-                    .checked_sub(optimal)
-                    .ok_or(CdpError::MathOverflow)?;
-                let slope2_contribution = if range == 0 {
-                    config.rate_slope2_bps as u128
-                } else {
-                    (config.rate_slope2_bps as u128)
-                        .checked_mul(excess)
-                        .ok_or(CdpError::MathOverflow)?
-                        .checked_div(range)
-                        .ok_or(CdpError::MathOverflow)?
-                };
-                (config.base_rate_bps as u128)
-                    .checked_add(config.rate_slope1_bps as u128)
-                    .ok_or(CdpError::MathOverflow)?
-                    .checked_add(slope2_contribution)
-                    .ok_or(CdpError::MathOverflow)?
-            };
-
-            let interest = (position.rise_sol_debt_principal as u128)
-                .checked_mul(effective_rate_bps)
-                .ok_or(CdpError::MathOverflow)?
-                .checked_mul(slots_elapsed)
-                .ok_or(CdpError::MathOverflow)?
-                .checked_div(10_000)
-                .ok_or(CdpError::MathOverflow)?
-                .checked_div(CollateralConfig::SLOTS_PER_YEAR)
-                .ok_or(CdpError::MathOverflow)?;
-
-            let interest_u64 = u64::try_from(interest).map_err(|_| CdpError::MathOverflow)?;
-
-            if interest_u64 > 0 {
-                position.interest_accrued = position
-                    .interest_accrued
-                    .checked_add(interest_u64)
-                    .ok_or(CdpError::MathOverflow)?;
-                position.last_accrual_slot = current_slot;
-            }
-        }
+        let staking_supply = ctx.accounts.global_pool.staking_rise_sol_supply;
+        accrue_interest(
+            &mut ctx.accounts.position,
+            &ctx.accounts.cdp_config,
+            &ctx.accounts.collateral_config,
+            staking_supply,
+            current_slot,
+        )?;
     }
 
     let position = &mut ctx.accounts.position;
@@ -249,11 +262,74 @@ pub fn handler(
         }
 
         if shortfall > 0 && !shortfall_route_plan_data.is_empty() {
+            // remaining_accounts order (all 14 required for shortfall path):
+            //  [0]  collateral_mint
+            //  [1]  sol_payment_config
+            //  [2]  price_update (collateral Pyth feed)
+            //  [3]  sol_price_update (SOL/USD Pyth feed)
+            //  [4]  treasury
+            //  [5]  reserve_vault
+            //  [6]  pool_vault
+            //  [7]  wsol_mint
+            //  [8]  cdp_wsol_buyback_vault
+            //  [9]  jupiter_program
+            //  [10] jupiter_program_authority
+            //  [11] jupiter_event_authority
+            //  [12] shortfall_jupiter_source_token
+            //  [13] shortfall_jupiter_destination_token
+            // Clone AccountInfos from remaining_accounts in a separate scope so the
+            // borrow of `ctx.remaining_accounts` is released before `ctx.accounts` is used.
+            let (
+                collateral_mint_ai, sol_payment_config_ai,
+                price_update_ai, sol_price_update_ai,
+                treasury_ai, reserve_vault_ai, pool_vault_ai,
+                wsol_mint_ai, cdp_wsol_buyback_vault_ai,
+                jupiter_program_ai, jupiter_authority_ai, jupiter_event_ai,
+                jup_src_token_ai, jup_dst_token_ai,
+            ) = {
+                let rem = ctx.remaining_accounts;
+                require!(rem.len() >= 14, CdpError::MissingShortfallAccounts);
+                (
+                    rem[0].clone(), rem[1].clone(),
+                    rem[2].clone(), rem[3].clone(),
+                    rem[4].clone(), rem[5].clone(), rem[6].clone(),
+                    rem[7].clone(), rem[8].clone(),
+                    rem[9].clone(), rem[10].clone(), rem[11].clone(),
+                    rem[12].clone(), rem[13].clone(),
+                )
+            };
+
+            // Validate the Jupiter program and buyback vault to prevent fund redirection.
+            require_keys_eq!(jupiter_program_ai.key(), crate::jupiter::PROGRAM_ID, CdpError::InvalidAccount);
+            let (expected_buyback_vault, _) = Pubkey::find_program_address(
+                &[b"cdp_wsol_buyback_vault"],
+                &crate::ID,
+            );
+            require_keys_eq!(cdp_wsol_buyback_vault_ai.key(), expected_buyback_vault, CdpError::InvalidAccount);
+
+            // Read collateral mint decimals from raw SPL Mint data (decimals at byte 44).
+            let decimals = {
+                let data = collateral_mint_ai.try_borrow_data()?;
+                require!(data.len() >= 45, CdpError::InvalidAccount);
+                data[44]
+            };
+
+            // Deserialize sol_payment_config to get SOL/USD Pyth feed ID.
+            let sol_feed_id = {
+                use anchor_lang::AccountDeserialize;
+                let data = sol_payment_config_ai.try_borrow_data()?;
+                let cfg = PaymentConfig::try_deserialize(&mut &data[..])?;
+                cfg.pyth_price_feed.to_bytes()
+            };
+
             // Compute how much SOL the shortfall tokens are worth via Pyth.
-            let coll_price = crate::pyth::get_pyth_price(&ctx.accounts.price_update, &ctx.accounts.collateral_config.pyth_price_feed.to_bytes())?;
-            let sol_price  = crate::pyth::get_pyth_price(&ctx.accounts.sol_price_update, &ctx.accounts.sol_payment_config.pyth_price_feed.to_bytes())?;
-            let decimals   = ctx.accounts.collateral_mint.decimals;
-            let dec_scale  = 10u128.pow(decimals as u32);
+            let coll_price = crate::pyth::get_pyth_price_info(
+                &price_update_ai,
+                &ctx.accounts.collateral_config.pyth_price_feed.to_bytes(),
+            )?;
+            let sol_price = crate::pyth::get_pyth_price_info(&sol_price_update_ai, &sol_feed_id)?;
+
+            let dec_scale = 10u128.pow(decimals as u32);
 
             let sf_usd = (shortfall as u128)
                 .checked_mul(coll_price).ok_or(CdpError::MathOverflow)?
@@ -274,9 +350,9 @@ pub fn handler(
                         rise_staking::cpi::accounts::WithdrawTreasuryForCdpBuyback {
                             cdp_config:             ctx.accounts.cdp_config.to_account_info(),
                             global_pool:            ctx.accounts.global_pool.to_account_info(),
-                            treasury:               ctx.accounts.treasury.to_account_info(),
-                            reserve_vault:          ctx.accounts.reserve_vault.to_account_info(),
-                            cdp_wsol_buyback_vault: ctx.accounts.cdp_wsol_buyback_vault.to_account_info(),
+                            treasury:               treasury_ai.clone(),
+                            reserve_vault:          reserve_vault_ai.clone(),
+                            cdp_wsol_buyback_vault: cdp_wsol_buyback_vault_ai.clone(),
                             system_program:         ctx.accounts.system_program.to_account_info(),
                         },
                         signer_seeds,
@@ -287,23 +363,21 @@ pub fn handler(
                 // Reflect the lamport deposit in the WSOL token account balance.
                 token::sync_native(CpiContext::new(
                     ctx.accounts.token_program.to_account_info(),
-                    SyncNative {
-                        account: ctx.accounts.cdp_wsol_buyback_vault.to_account_info(),
-                    },
+                    SyncNative { account: cdp_wsol_buyback_vault_ai.clone() },
                 ))?;
 
                 // Jupiter swap: cdp_wsol_buyback_vault (WSOL) → borrower_collateral_account
                 crate::jupiter::shared_accounts_route(
-                    &ctx.accounts.jupiter_program,
-                    &ctx.accounts.jupiter_program_authority,
-                    &ctx.accounts.cdp_config.to_account_info(),              // PDA authority over vault
-                    &ctx.accounts.cdp_wsol_buyback_vault.to_account_info(),  // source (WSOL)
-                    &ctx.accounts.shortfall_jupiter_source_token,
-                    &ctx.accounts.shortfall_jupiter_destination_token,
-                    &ctx.accounts.borrower_collateral_account.to_account_info(), // dest
-                    &ctx.accounts.wsol_mint.to_account_info(),               // source mint
-                    &ctx.accounts.collateral_mint.to_account_info(),         // dest mint
-                    &ctx.accounts.jupiter_event_authority,
+                    &jupiter_program_ai,
+                    &jupiter_authority_ai,
+                    &ctx.accounts.cdp_config.to_account_info(),
+                    &cdp_wsol_buyback_vault_ai,
+                    &jup_src_token_ai,
+                    &jup_dst_token_ai,
+                    &ctx.accounts.borrower_collateral_account.to_account_info(),
+                    &wsol_mint_ai,
+                    &collateral_mint_ai,
+                    &jupiter_event_ai,
                     &ctx.accounts.token_program.to_account_info(),
                     &shortfall_route_plan_data,
                     shortfall_sol,
@@ -317,8 +391,8 @@ pub fn handler(
                     CpiContext::new_with_signer(
                         ctx.accounts.token_program.to_account_info(),
                         CloseAccount {
-                            account:     ctx.accounts.cdp_wsol_buyback_vault.to_account_info(),
-                            destination: ctx.accounts.pool_vault.to_account_info(),
+                            account:     cdp_wsol_buyback_vault_ai.clone(),
+                            destination: pool_vault_ai.clone(),
                             authority:   ctx.accounts.cdp_config.to_account_info(),
                         },
                         signer_seeds,
@@ -363,7 +437,7 @@ pub struct RepayDebtRiseSol<'info> {
         constraint = position.owner == borrower.key(),
         constraint = position.is_open @ CdpError::PositionClosed
     )]
-    pub position: Account<'info, CdpPosition>,
+    pub position: Box<Account<'info, CdpPosition>>,
 
     #[account(
         mut,
@@ -405,10 +479,6 @@ pub struct RepayDebtRiseSol<'info> {
     )]
     pub borrower_collateral_account: Box<Account<'info, TokenAccount>>,
 
-    /// Collateral token mint — needed for decimal scaling in shortfall SOL computation.
-    #[account(constraint = collateral_mint.key() == collateral_config.mint @ CdpError::CollateralNotAccepted)]
-    pub collateral_mint: Box<Account<'info, Mint>>,
-
     /// Global CDP config — tracks total CDP riseSOL minted; PDA signer for staking CPIs.
     #[account(
         mut,
@@ -426,83 +496,6 @@ pub struct RepayDebtRiseSol<'info> {
     )]
     pub global_pool: Box<Account<'info, rise_staking::state::GlobalPool>>,
 
-    /// Protocol treasury — reserve_lamports decremented by buyback withdrawal.
-    #[account(
-        mut,
-        seeds = [b"protocol_treasury"],
-        seeds::program = rise_staking::ID,
-        bump = treasury.bump
-    )]
-    pub treasury: Box<Account<'info, rise_staking::state::ProtocolTreasury>>,
-
-    /// Protocol reserve vault — source of buyback funds (shortfall path only).
-    /// CHECK: PDA verified by seeds on the staking program.
-    #[account(
-        mut,
-        seeds = [b"reserve_vault"],
-        seeds::program = rise_staking::ID,
-        bump
-    )]
-    pub reserve_vault: UncheckedAccount<'info>,
-
-    /// Staking pool SOL vault — receives residual WSOL swept from buyback vault after swap.
-    /// CHECK: PDA verified by seeds on the staking program.
-    #[account(
-        mut,
-        seeds = [b"pool_vault"],
-        seeds::program = rise_staking::ID,
-        bump
-    )]
-    pub pool_vault: UncheckedAccount<'info>,
-
-    /// Native SOL (WSOL) mint — needed for Jupiter buyback swap.
-    #[account(address = anchor_spl::token::spl_token::native_mint::ID)]
-    pub wsol_mint: Box<Account<'info, Mint>>,
-
-    /// Protocol WSOL buyback vault: receives treasury SOL (via staking CPI), wrapped as WSOL,
-    /// then swapped → collateral tokens → borrower. Pre-initialized by init_wsol_vaults.
-    #[account(
-        mut,
-        seeds = [b"cdp_wsol_buyback_vault"],
-        bump,
-        constraint = cdp_wsol_buyback_vault.mint == wsol_mint.key(),
-        constraint = cdp_wsol_buyback_vault.owner == cdp_config.key(),
-    )]
-    pub cdp_wsol_buyback_vault: Box<Account<'info, TokenAccount>>,
-
-    /// SOL payment config — provides the registered SOL/USD price feed pubkey for validation.
-    #[account(
-        seeds = [b"payment_config", anchor_lang::solana_program::system_program::ID.as_ref()],
-        bump = sol_payment_config.bump,
-    )]
-    pub sol_payment_config: Box<Account<'info, PaymentConfig>>,
-
-    /// Pyth PriceUpdateV2 for collateral token — used only in the shortfall buyback path.
-    pub price_update: Account<'info, PriceUpdateV2>,
-
-    /// Pyth PriceUpdateV2 for SOL/USD — used only in the shortfall buyback path.
-    pub sol_price_update: Account<'info, PriceUpdateV2>,
-
-    // ── Jupiter accounts (shortfall buyback path only) ────────────────────────
-
-    /// CHECK: Jupiter v6 program.
-    #[account(address = crate::jupiter::PROGRAM_ID)]
-    pub jupiter_program: AccountInfo<'info>,
-
-    /// CHECK: Jupiter's shared authority PDA.
-    pub jupiter_program_authority: AccountInfo<'info>,
-
-    /// CHECK: Jupiter's event authority PDA.
-    pub jupiter_event_authority: AccountInfo<'info>,
-
-    /// CHECK: Jupiter's shared source token account for the buyback route (WSOL side).
-    #[account(mut)]
-    pub shortfall_jupiter_source_token: AccountInfo<'info>,
-
-    /// CHECK: Jupiter's shared destination token account for the buyback route (collateral side).
-    #[account(mut)]
-    pub shortfall_jupiter_destination_token: AccountInfo<'info>,
-
     pub staking_program: Program<'info, RiseStaking>,
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
@@ -513,7 +506,7 @@ pub struct RepayDebtRiseSol<'info> {
         seeds = [b"borrow_rewards_config"],
         bump = borrow_rewards_config.bump
     )]
-    pub borrow_rewards_config: Account<'info, BorrowRewardsConfig>,
+    pub borrow_rewards_config: Box<Account<'info, BorrowRewardsConfig>>,
 
     /// Per-position borrow rewards — settled before debt is reduced.
     #[account(
@@ -522,5 +515,5 @@ pub struct RepayDebtRiseSol<'info> {
         bump = borrow_rewards.bump,
         constraint = borrow_rewards.position == position.key()
     )]
-    pub borrow_rewards: Account<'info, BorrowRewards>,
+    pub borrow_rewards: Box<Account<'info, BorrowRewards>>,
 }
