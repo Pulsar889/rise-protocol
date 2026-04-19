@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Transfer as TokenTransfer, Mint, SyncNative};
-use crate::state::{CdpPosition, CollateralConfig, CdpConfig, PaymentConfig};
+use crate::state::{CdpPosition, CollateralConfig, CdpConfig, PaymentConfig, BorrowRewards};
 use crate::errors::CdpError;
 use rise_staking::program::RiseStaking;
 use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
@@ -323,4 +323,14 @@ pub struct ClaimCollateral<'info> {
 
     pub token_program: Program<'info, Token>,
     pub system_program: Program<'info, System>,
+
+    /// Per-position borrow rewards — closed here so the nonce can be safely reused.
+    #[account(
+        mut,
+        seeds = [b"borrow_rewards", position.key().as_ref()],
+        bump = borrow_rewards.bump,
+        constraint = borrow_rewards.position == position.key(),
+        close = borrower
+    )]
+    pub borrow_rewards: Box<Account<'info, BorrowRewards>>,
 }
