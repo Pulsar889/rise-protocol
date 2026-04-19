@@ -16,97 +16,111 @@ use pyth_solana_receiver_sdk::price_update::PriceUpdateV2;
 /// actual riseSOL tokens to the borrower, since riseSOL mint authority belongs to
 /// the GlobalPool PDA. Until that CPI is added, debt is tracked on-chain but
 /// no token is transferred to the borrower's wallet.
+#[inline(never)]
+fn accrue_interest(
+    position: &mut CdpPosition,
+    cdp_config: &CdpConfig,
+    collateral_config: &CollateralConfig,
+    staking_supply: u128,
+    current_slot: u64,
+) -> Result<()> {
+    if current_slot > position.last_accrual_slot && position.rise_sol_debt_principal > 0 {
+        let slots_elapsed = current_slot
+            .checked_sub(position.last_accrual_slot)
+            .ok_or(CdpError::MathOverflow)? as u128;
+
+        let ceiling = staking_supply
+            .checked_mul(cdp_config.debt_ceiling_multiplier_bps as u128)
+            .ok_or(CdpError::MathOverflow)?
+            .checked_div(10_000)
+            .ok_or(CdpError::MathOverflow)?;
+
+        let utilization_bps: u128 = if ceiling == 0 {
+            10_000
+        } else {
+            (cdp_config.cdp_rise_sol_minted
+                .checked_mul(10_000)
+                .ok_or(CdpError::MathOverflow)?
+                .checked_div(ceiling)
+                .ok_or(CdpError::MathOverflow)?)
+                .min(10_000)
+        };
+
+        let optimal = collateral_config.optimal_utilization_bps as u128;
+
+        let effective_rate_bps: u128 = if utilization_bps <= optimal {
+            let slope1_contribution = if optimal == 0 {
+                0
+            } else {
+                (collateral_config.rate_slope1_bps as u128)
+                    .checked_mul(utilization_bps)
+                    .ok_or(CdpError::MathOverflow)?
+                    .checked_div(optimal)
+                    .ok_or(CdpError::MathOverflow)?
+            };
+            (collateral_config.base_rate_bps as u128)
+                .checked_add(slope1_contribution)
+                .ok_or(CdpError::MathOverflow)?
+        } else {
+            let excess = utilization_bps
+                .checked_sub(optimal)
+                .ok_or(CdpError::MathOverflow)?;
+            let range = 10_000u128
+                .checked_sub(optimal)
+                .ok_or(CdpError::MathOverflow)?;
+            let slope2_contribution = if range == 0 {
+                collateral_config.rate_slope2_bps as u128
+            } else {
+                (collateral_config.rate_slope2_bps as u128)
+                    .checked_mul(excess)
+                    .ok_or(CdpError::MathOverflow)?
+                    .checked_div(range)
+                    .ok_or(CdpError::MathOverflow)?
+            };
+            (collateral_config.base_rate_bps as u128)
+                .checked_add(collateral_config.rate_slope1_bps as u128)
+                .ok_or(CdpError::MathOverflow)?
+                .checked_add(slope2_contribution)
+                .ok_or(CdpError::MathOverflow)?
+        };
+
+        let interest = (position.rise_sol_debt_principal as u128)
+            .checked_mul(effective_rate_bps)
+            .ok_or(CdpError::MathOverflow)?
+            .checked_mul(slots_elapsed)
+            .ok_or(CdpError::MathOverflow)?
+            .checked_div(10_000)
+            .ok_or(CdpError::MathOverflow)?
+            .checked_div(CollateralConfig::SLOTS_PER_YEAR)
+            .ok_or(CdpError::MathOverflow)?;
+
+        let interest_u64 = u64::try_from(interest).map_err(|_| CdpError::MathOverflow)?;
+
+        if interest_u64 > 0 {
+            position.interest_accrued = position
+                .interest_accrued
+                .checked_add(interest_u64)
+                .ok_or(CdpError::MathOverflow)?;
+            position.last_accrual_slot = current_slot;
+        }
+    }
+    Ok(())
+}
+
 pub fn handler(ctx: Context<BorrowMore>, additional_rise_sol: u64) -> Result<()> {
     require!(additional_rise_sol > 0, CdpError::ZeroAmount);
 
-    // ── Inline interest accrual ────────────────────────────────────────────────
+    // ── Interest accrual (extracted to avoid BPF stack overflow) ──────────────
     {
         let current_slot = Clock::get()?.slot;
-        let position = &mut ctx.accounts.position;
-        if current_slot > position.last_accrual_slot && position.rise_sol_debt_principal > 0 {
-            let slots_elapsed = current_slot
-                .checked_sub(position.last_accrual_slot)
-                .ok_or(CdpError::MathOverflow)? as u128;
-
-            let cdp_config = &ctx.accounts.cdp_config;
-            let config = &ctx.accounts.collateral_config;
-            let staking_supply = ctx.accounts.global_pool.staking_rise_sol_supply;
-
-            let ceiling = staking_supply
-                .checked_mul(cdp_config.debt_ceiling_multiplier_bps as u128)
-                .ok_or(CdpError::MathOverflow)?
-                .checked_div(10_000)
-                .ok_or(CdpError::MathOverflow)?;
-
-            let utilization_bps: u128 = if ceiling == 0 {
-                10_000
-            } else {
-                (cdp_config.cdp_rise_sol_minted
-                    .checked_mul(10_000)
-                    .ok_or(CdpError::MathOverflow)?
-                    .checked_div(ceiling)
-                    .ok_or(CdpError::MathOverflow)?)
-                    .min(10_000)
-            };
-
-            let optimal = config.optimal_utilization_bps as u128;
-
-            let effective_rate_bps: u128 = if utilization_bps <= optimal {
-                let slope1_contribution = if optimal == 0 {
-                    0
-                } else {
-                    (config.rate_slope1_bps as u128)
-                        .checked_mul(utilization_bps)
-                        .ok_or(CdpError::MathOverflow)?
-                        .checked_div(optimal)
-                        .ok_or(CdpError::MathOverflow)?
-                };
-                (config.base_rate_bps as u128)
-                    .checked_add(slope1_contribution)
-                    .ok_or(CdpError::MathOverflow)?
-            } else {
-                let excess = utilization_bps
-                    .checked_sub(optimal)
-                    .ok_or(CdpError::MathOverflow)?;
-                let range = 10_000u128
-                    .checked_sub(optimal)
-                    .ok_or(CdpError::MathOverflow)?;
-                let slope2_contribution = if range == 0 {
-                    config.rate_slope2_bps as u128
-                } else {
-                    (config.rate_slope2_bps as u128)
-                        .checked_mul(excess)
-                        .ok_or(CdpError::MathOverflow)?
-                        .checked_div(range)
-                        .ok_or(CdpError::MathOverflow)?
-                };
-                (config.base_rate_bps as u128)
-                    .checked_add(config.rate_slope1_bps as u128)
-                    .ok_or(CdpError::MathOverflow)?
-                    .checked_add(slope2_contribution)
-                    .ok_or(CdpError::MathOverflow)?
-            };
-
-            let interest = (position.rise_sol_debt_principal as u128)
-                .checked_mul(effective_rate_bps)
-                .ok_or(CdpError::MathOverflow)?
-                .checked_mul(slots_elapsed)
-                .ok_or(CdpError::MathOverflow)?
-                .checked_div(10_000)
-                .ok_or(CdpError::MathOverflow)?
-                .checked_div(CollateralConfig::SLOTS_PER_YEAR)
-                .ok_or(CdpError::MathOverflow)?;
-
-            let interest_u64 = u64::try_from(interest).map_err(|_| CdpError::MathOverflow)?;
-
-            if interest_u64 > 0 {
-                position.interest_accrued = position
-                    .interest_accrued
-                    .checked_add(interest_u64)
-                    .ok_or(CdpError::MathOverflow)?;
-                position.last_accrual_slot = current_slot;
-            }
-        }
+        let staking_supply = ctx.accounts.global_pool.staking_rise_sol_supply;
+        accrue_interest(
+            &mut ctx.accounts.position,
+            &ctx.accounts.cdp_config,
+            &ctx.accounts.collateral_config,
+            staking_supply,
+            current_slot,
+        )?;
     }
 
     let position = &mut ctx.accounts.position;
