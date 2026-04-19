@@ -229,6 +229,11 @@ pub mod rise_cdp {
         instructions::claim_collateral::handler(ctx, route_plan_data, quoted_out_amount, slippage_bps)
     }
 
+    /// Authority-only: close an old-format CdpPosition that can no longer be deserialized.
+    pub fn close_stale_position(ctx: Context<CloseStalePosition>) -> Result<()> {
+        instructions::close_stale_position::handler(ctx)
+    }
+
     /// Authority-only: update the Pyth price feed and/or active flag on a payment config.
     pub fn update_payment_config(
         ctx: Context<UpdatePaymentConfig>,
