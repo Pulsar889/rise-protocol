@@ -109,18 +109,26 @@ pub mod rise_cdp {
         instructions::initialize_payment_config::handler(ctx, feed_id)
     }
 
-    /// Repay all or part of a CDP debt using SOL or an accepted SPL token.
-    /// For SPL token payments, `route_plan_data` is Borsh-serialized `Vec<RoutePlanStep>` from
-    /// the Jupiter quote API; it is swapped to SOL on-chain. Pass empty / 0 for native SOL.
+    /// Repay all or part of a CDP debt using native SOL.
     /// On full repayment, call claim_collateral afterward to receive collateral tokens.
     pub fn repay_debt(
         ctx: Context<RepayDebt>,
+        payment_amount: u64,
+    ) -> Result<()> {
+        instructions::repay_debt::handler(ctx, payment_amount)
+    }
+
+    /// Repay all or part of a CDP debt using an SPL token (USDC, USDT, wBTC, wETH).
+    /// `route_plan_data` is Borsh-serialized `Vec<RoutePlanStep>` from the Jupiter quote API;
+    /// the token is swapped → SOL on-chain. On full repayment, call claim_collateral afterward.
+    pub fn repay_debt_spl(
+        ctx: Context<RepayDebtSpl>,
         payment_amount: u64,
         route_plan_data: Vec<u8>,
         quoted_out_amount: u64,
         slippage_bps: u16,
     ) -> Result<()> {
-        instructions::repay_debt::handler(
+        instructions::repay_debt_spl::handler(
             ctx,
             payment_amount,
             route_plan_data,
