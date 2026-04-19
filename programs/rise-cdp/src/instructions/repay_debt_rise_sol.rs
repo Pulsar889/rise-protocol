@@ -1,6 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Transfer, Burn, Mint, SyncNative, CloseAccount};
-use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig, PaymentConfig};
+use anchor_spl::token::{self, Token, TokenAccount, Burn, Mint};
+use crate::state::{CdpPosition, CollateralConfig, CdpConfig, BorrowRewards, BorrowRewardsConfig};
 use crate::errors::CdpError;
 use rise_staking::program::RiseStaking;
 
@@ -13,13 +13,9 @@ use rise_staking::program::RiseStaking;
 /// remaining riseSOL holders.
 ///
 /// Interest is cleared before principal (standard lending convention).
-/// On full repayment the position is closed and collateral returned.
-///
-/// Shortfall buyback: if collateral was previously seized (via redeem_collateral_for_liquidity),
-/// the protocol treasury funds the buyback. The staking program transfers `shortfall_sol` from
-/// reserve_vault → cdp_wsol_buyback_vault, which is then wrapped as WSOL and swapped via
-/// Jupiter → collateral tokens → borrower. Pass empty bytes / 0 for shortfall params in
-/// the common case (no shortfall expected).
+/// On full repayment, position.is_open is set to false and pending_buyback_lamports
+/// is set to zero (treasury funds any shortfall buyback in claim_collateral).
+/// Call claim_collateral afterward to receive collateral.
 #[inline(never)]
 fn accrue_interest(
     position: &mut CdpPosition,
@@ -111,12 +107,9 @@ fn accrue_interest(
     Ok(())
 }
 
-pub fn handler<'info>(
-    ctx: Context<'_, '_, '_, 'info, RepayDebtRiseSol<'info>>,
+pub fn handler(
+    ctx: Context<RepayDebtRiseSol>,
     payment_rise_sol: u64,
-    shortfall_route_plan_data: Vec<u8>,
-    shortfall_quoted_out: u64,
-    shortfall_slippage_bps: u16,
 ) -> Result<()> {
     require!(payment_rise_sol > 0, CdpError::ZeroAmount);
 
@@ -223,199 +216,17 @@ pub fn handler<'info>(
         )?;
     }
 
-    // ── Full repayment: return collateral and execute treasury buyback if needed ──
+    // ── Full repayment: mark position closed, treasury will fund buyback ──────
     let is_fully_repaid =
         position.interest_accrued == 0 && position.rise_sol_debt_principal == 0;
 
     if is_fully_repaid {
-        // Guard against reentrancy through collateral-return and Jupiter buyback CPIs.
         position.is_open = false;
+        // pending_buyback_lamports = 0 signals that claim_collateral should use the
+        // protocol treasury (withdraw_treasury_for_cdp_buyback) to fund any shortfall buyback.
+        position.pending_buyback_lamports = 0;
 
-        ctx.accounts.collateral_config.total_collateral_entitlements = ctx
-            .accounts
-            .collateral_config
-            .total_collateral_entitlements
-            .saturating_sub(position.collateral_amount_original);
-
-        let collateral_config = &ctx.accounts.collateral_config;
-        let config_mint_ref = collateral_config.mint.as_ref();
-        let vault_bump = ctx.bumps.collateral_vault;
-        let seeds = &[b"collateral_vault".as_ref(), config_mint_ref, &[vault_bump]];
-        let signer = &[&seeds[..]];
-
-        let owed = position.collateral_amount_original;
-        let available = ctx.accounts.collateral_vault.amount.min(owed);
-        let shortfall = owed.saturating_sub(available);
-
-        // Transfer whatever collateral is in the vault
-        if available > 0 {
-            let cpi_ctx = CpiContext::new_with_signer(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.collateral_vault.to_account_info(),
-                    to: ctx.accounts.borrower_collateral_account.to_account_info(),
-                    authority: ctx.accounts.collateral_vault.to_account_info(),
-                },
-                signer,
-            );
-            token::transfer(cpi_ctx, available)?;
-        }
-
-        if shortfall > 0 && !shortfall_route_plan_data.is_empty() {
-            // remaining_accounts order (all 14 required for shortfall path):
-            //  [0]  collateral_mint
-            //  [1]  sol_payment_config
-            //  [2]  price_update (collateral Pyth feed)
-            //  [3]  sol_price_update (SOL/USD Pyth feed)
-            //  [4]  treasury
-            //  [5]  reserve_vault
-            //  [6]  pool_vault
-            //  [7]  wsol_mint
-            //  [8]  cdp_wsol_buyback_vault
-            //  [9]  jupiter_program
-            //  [10] jupiter_program_authority
-            //  [11] jupiter_event_authority
-            //  [12] shortfall_jupiter_source_token
-            //  [13] shortfall_jupiter_destination_token
-            // Clone AccountInfos from remaining_accounts in a separate scope so the
-            // borrow of `ctx.remaining_accounts` is released before `ctx.accounts` is used.
-            let (
-                collateral_mint_ai, sol_payment_config_ai,
-                price_update_ai, sol_price_update_ai,
-                treasury_ai, reserve_vault_ai, pool_vault_ai,
-                wsol_mint_ai, cdp_wsol_buyback_vault_ai,
-                jupiter_program_ai, jupiter_authority_ai, jupiter_event_ai,
-                jup_src_token_ai, jup_dst_token_ai,
-            ) = {
-                let rem = ctx.remaining_accounts;
-                require!(rem.len() >= 14, CdpError::MissingShortfallAccounts);
-                (
-                    rem[0].clone(), rem[1].clone(),
-                    rem[2].clone(), rem[3].clone(),
-                    rem[4].clone(), rem[5].clone(), rem[6].clone(),
-                    rem[7].clone(), rem[8].clone(),
-                    rem[9].clone(), rem[10].clone(), rem[11].clone(),
-                    rem[12].clone(), rem[13].clone(),
-                )
-            };
-
-            // Validate the Jupiter program and buyback vault to prevent fund redirection.
-            require_keys_eq!(jupiter_program_ai.key(), crate::jupiter::PROGRAM_ID, CdpError::InvalidAccount);
-            let (expected_buyback_vault, _) = Pubkey::find_program_address(
-                &[b"cdp_wsol_buyback_vault"],
-                &crate::ID,
-            );
-            require_keys_eq!(cdp_wsol_buyback_vault_ai.key(), expected_buyback_vault, CdpError::InvalidAccount);
-
-            // Read collateral mint decimals from raw SPL Mint data (decimals at byte 44).
-            let decimals = {
-                let data = collateral_mint_ai.try_borrow_data()?;
-                require!(data.len() >= 45, CdpError::InvalidAccount);
-                data[44]
-            };
-
-            // Deserialize sol_payment_config to get SOL/USD Pyth feed ID.
-            let sol_feed_id = {
-                use anchor_lang::AccountDeserialize;
-                let data = sol_payment_config_ai.try_borrow_data()?;
-                let cfg = PaymentConfig::try_deserialize(&mut &data[..])?;
-                cfg.pyth_price_feed.to_bytes()
-            };
-
-            // Compute how much SOL the shortfall tokens are worth via Pyth.
-            let coll_price = crate::pyth::get_pyth_price_info(
-                &price_update_ai,
-                &ctx.accounts.collateral_config.pyth_price_feed.to_bytes(),
-            )?;
-            let sol_price = crate::pyth::get_pyth_price_info(&sol_price_update_ai, &sol_feed_id)?;
-
-            let dec_scale = 10u128.pow(decimals as u32);
-
-            let sf_usd = (shortfall as u128)
-                .checked_mul(coll_price).ok_or(CdpError::MathOverflow)?
-                .checked_div(dec_scale).ok_or(CdpError::MathOverflow)?;
-
-            let shortfall_sol = sf_usd
-                .checked_mul(1_000_000_000u128).ok_or(CdpError::MathOverflow)?
-                .checked_div(sol_price).ok_or(CdpError::MathOverflow)? as u64;
-
-            if shortfall_sol > 0 {
-                let bump = ctx.accounts.cdp_config.bump;
-                let signer_seeds: &[&[&[u8]]] = &[&[b"cdp_config", &[bump]]];
-
-                // CPI: reserve_vault → cdp_wsol_buyback_vault (native SOL transfer)
-                rise_staking::cpi::withdraw_treasury_for_cdp_buyback(
-                    CpiContext::new_with_signer(
-                        ctx.accounts.staking_program.to_account_info(),
-                        rise_staking::cpi::accounts::WithdrawTreasuryForCdpBuyback {
-                            cdp_config:             ctx.accounts.cdp_config.to_account_info(),
-                            global_pool:            ctx.accounts.global_pool.to_account_info(),
-                            treasury:               treasury_ai.clone(),
-                            reserve_vault:          reserve_vault_ai.clone(),
-                            cdp_wsol_buyback_vault: cdp_wsol_buyback_vault_ai.clone(),
-                            system_program:         ctx.accounts.system_program.to_account_info(),
-                        },
-                        signer_seeds,
-                    ),
-                    shortfall_sol,
-                )?;
-
-                // Reflect the lamport deposit in the WSOL token account balance.
-                token::sync_native(CpiContext::new(
-                    ctx.accounts.token_program.to_account_info(),
-                    SyncNative { account: cdp_wsol_buyback_vault_ai.clone() },
-                ))?;
-
-                // Jupiter swap: cdp_wsol_buyback_vault (WSOL) → borrower_collateral_account
-                crate::jupiter::shared_accounts_route(
-                    &jupiter_program_ai,
-                    &jupiter_authority_ai,
-                    &ctx.accounts.cdp_config.to_account_info(),
-                    &cdp_wsol_buyback_vault_ai,
-                    &jup_src_token_ai,
-                    &jup_dst_token_ai,
-                    &ctx.accounts.borrower_collateral_account.to_account_info(),
-                    &wsol_mint_ai,
-                    &collateral_mint_ai,
-                    &jupiter_event_ai,
-                    &ctx.accounts.token_program.to_account_info(),
-                    &shortfall_route_plan_data,
-                    shortfall_sol,
-                    shortfall_quoted_out,
-                    shortfall_slippage_bps,
-                    signer_seeds,
-                )?;
-
-                // Close the buyback vault to sweep any residual WSOL to pool_vault.
-                token::close_account(
-                    CpiContext::new_with_signer(
-                        ctx.accounts.token_program.to_account_info(),
-                        CloseAccount {
-                            account:     cdp_wsol_buyback_vault_ai.clone(),
-                            destination: pool_vault_ai.clone(),
-                            authority:   ctx.accounts.cdp_config.to_account_info(),
-                        },
-                        signer_seeds,
-                    ),
-                )?;
-
-                msg!(
-                    "Treasury buyback complete: {} lamports WSOL → collateral tokens for borrower",
-                    shortfall_sol
-                );
-            }
-        } else if shortfall > 0 {
-            msg!(
-                "WARN: Collateral shortfall of {} tokens — no route plan provided, skipping buyback",
-                shortfall
-            );
-        }
-
-        msg!(
-            "Position fully repaid (riseSOL) and closed. Collateral returned: {} (shortfall: {})",
-            available,
-            shortfall
-        );
+        msg!("Position fully repaid (riseSOL) and closed. Call claim_collateral to receive collateral.");
     }
 
     msg!("riseSOL interest cleared:  {}", interest_cleared);
@@ -461,23 +272,6 @@ pub struct RepayDebtRiseSol<'info> {
         constraint = borrower_rise_sol_account.owner == borrower.key()
     )]
     pub borrower_rise_sol_account: Box<Account<'info, TokenAccount>>,
-
-    /// Protocol collateral vault — returns tokens on full repayment.
-    #[account(
-        mut,
-        seeds = [b"collateral_vault", collateral_config.mint.as_ref()],
-        bump,
-        constraint = collateral_vault.mint == collateral_config.mint
-    )]
-    pub collateral_vault: Box<Account<'info, TokenAccount>>,
-
-    /// Borrower's collateral account — receives collateral back on full repayment.
-    #[account(
-        mut,
-        constraint = borrower_collateral_account.mint == collateral_config.mint,
-        constraint = borrower_collateral_account.owner == borrower.key()
-    )]
-    pub borrower_collateral_account: Box<Account<'info, TokenAccount>>,
 
     /// Global CDP config — tracks total CDP riseSOL minted; PDA signer for staking CPIs.
     #[account(

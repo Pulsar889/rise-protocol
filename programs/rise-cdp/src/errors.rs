@@ -79,4 +79,7 @@ pub enum CdpError {
 
     #[msg("Invalid account key provided")]
     InvalidAccount,
+
+    #[msg("Position must be fully repaid before claiming collateral")]
+    PositionStillOpen,
 }

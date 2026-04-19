@@ -112,17 +112,13 @@ pub mod rise_cdp {
     /// Repay all or part of a CDP debt using SOL or an accepted SPL token.
     /// For SPL token payments, `route_plan_data` is Borsh-serialized `Vec<RoutePlanStep>` from
     /// the Jupiter quote API; it is swapped to SOL on-chain. Pass empty / 0 for native SOL.
-    /// `shortfall_route_plan_data` is a second Jupiter route (WSOL → collateral) used only on
-    /// full repayment when collateral was previously seized. Pass empty / 0 in the common case.
+    /// On full repayment, call claim_collateral afterward to receive collateral tokens.
     pub fn repay_debt(
         ctx: Context<RepayDebt>,
         payment_amount: u64,
         route_plan_data: Vec<u8>,
         quoted_out_amount: u64,
         slippage_bps: u16,
-        shortfall_route_plan_data: Vec<u8>,
-        shortfall_quoted_out: u64,
-        shortfall_slippage_bps: u16,
     ) -> Result<()> {
         instructions::repay_debt::handler(
             ctx,
@@ -130,9 +126,6 @@ pub mod rise_cdp {
             route_plan_data,
             quoted_out_amount,
             slippage_bps,
-            shortfall_route_plan_data,
-            shortfall_quoted_out,
-            shortfall_slippage_bps,
         )
     }
 
@@ -147,18 +140,13 @@ pub mod rise_cdp {
     }
 
     /// Repay all or part of a CDP debt by burning riseSOL tokens directly (1:1).
-    /// `shortfall_route_plan_data` is used on full repayment when seized collateral must be
-    /// bought back via Jupiter. Pass empty / 0 when no shortfall is expected (the common case).
-    pub fn repay_debt_rise_sol<'info>(
-        ctx: Context<'_, '_, '_, 'info, RepayDebtRiseSol<'info>>,
+    /// On full repayment, call claim_collateral afterward to receive collateral tokens.
+    /// Any shortfall buyback is funded by the protocol treasury in claim_collateral.
+    pub fn repay_debt_rise_sol(
+        ctx: Context<RepayDebtRiseSol>,
         payment_rise_sol: u64,
-        shortfall_route_plan_data: Vec<u8>,
-        shortfall_quoted_out: u64,
-        shortfall_slippage_bps: u16,
     ) -> Result<()> {
-        instructions::repay_debt_rise_sol::handler(
-            ctx, payment_rise_sol, shortfall_route_plan_data, shortfall_quoted_out, shortfall_slippage_bps,
-        )
+        instructions::repay_debt_rise_sol::handler(ctx, payment_rise_sol)
     }
 
     /// Initialize the global CDP config (debt ceiling). Authority only.
@@ -224,6 +212,21 @@ pub mod rise_cdp {
     /// Authority only.
     pub fn initialize_wsol_vaults(ctx: Context<InitializeWsolVaults>) -> Result<()> {
         instructions::initialize_wsol_vaults::handler(ctx)
+    }
+
+    /// Claim collateral from a fully-repaid CDP position.
+    /// Must be called after repay_debt or repay_debt_rise_sol has zeroed the debt.
+    /// Transfers available collateral to borrower, executes shortfall buyback if needed,
+    /// and closes the position account (rent returned to borrower).
+    /// `route_plan_data` is Borsh-serialized Jupiter route for the shortfall buyback swap;
+    /// pass empty / 0 if no shortfall is expected.
+    pub fn claim_collateral(
+        ctx: Context<ClaimCollateral>,
+        route_plan_data: Vec<u8>,
+        quoted_out_amount: u64,
+        slippage_bps: u16,
+    ) -> Result<()> {
+        instructions::claim_collateral::handler(ctx, route_plan_data, quoted_out_amount, slippage_bps)
     }
 
     /// Authority-only: update the Pyth price feed and/or active flag on a payment config.

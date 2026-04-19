@@ -306,6 +306,11 @@ pub struct CdpPosition {
     /// Slot after which queued withdrawal can be processed.
     pub excess_withdrawal_available_slot: u64,
 
+    /// SOL (lamports) diverted to cdp_wsol_buyback_vault during repay_debt when there is a
+    /// collateral shortfall. claim_collateral reads this to fund the Jupiter buyback swap.
+    /// Zero for riseSOL repayments (treasury funds the buyback instead).
+    pub pending_buyback_lamports: u64,
+
     /// Bump seed for PDA.
     pub bump: u8,
 }
@@ -325,6 +330,7 @@ impl CdpPosition {
         + 1   // is_open
         + 8   // excess_withdrawal_queued
         + 8   // excess_withdrawal_available_slot
+        + 8   // pending_buyback_lamports
         + 1;  // bump
 
     /// Get total riseSOL owed (principal + interest).
